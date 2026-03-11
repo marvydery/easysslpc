@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChallenge } from "@/lib/acme";
+import { db } from "@/lib/db";
+import { acmeChallenges, domains } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 
-/**
- * Bridge API Endpoint
- * This endpoint is called by the bridge.php file on user's servers
- * to retrieve ACME challenge responses
- */
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -13,34 +10,31 @@ export async function GET(request: NextRequest) {
     const token = searchParams.get("token");
     const secret = searchParams.get("secret");
 
-    // Validate parameters
     if (!domain || !token || !secret) {
-      return NextResponse.json(
-        { error: "Missing required parameters" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing required parameters" }, { status: 400 });
     }
 
-    // TODO: Verify the bridge secret against the database
-    // For now, we'll retrieve the challenge from memory
-    const keyAuthorization = getChallenge(domain, token);
+    const [domainRow] = await db.select().from(domains)
+      .where(and(eq(domains.domainName, domain), eq(domains.bridgeSecret, secret)))
+      .limit(1);
 
-    if (!keyAuthorization) {
-      return new NextResponse("Challenge not found", { status: 404 });
+    if (!domainRow) {
+      return new NextResponse("Forbidden", { status: 403 });
     }
 
-    // Return the challenge response as plain text
-    return new NextResponse(keyAuthorization, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/plain",
-      },
+    const [challenge] = await db.select().from(acmeChallenges)
+      .where(and(eq(acmeChallenges.domain, domain), eq(acmeChallenges.token, token)))
+      .limit(1);
+
+    if (!challenge) {
+      return new NextResponse("Not found", { status: 404 });
+    }
+
+    return new NextResponse(challenge.keyAuthorization, {
+      headers: { "Content-Type": "text/plain" }
     });
   } catch (error) {
     console.error("Bridge API error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
