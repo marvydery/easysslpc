@@ -102,10 +102,8 @@ export async function finaliseAcmeOrder(
   const { accountKeyPem, csrKeyPem, csrDer, orderUrl, token, keyAuthorization } =
     challengeInfo;
 
-  // Reconstruct the client with the *same* account key
-  const accountKey = acme.crypto.createPrivateKey
-    ? Buffer.from(accountKeyPem)
-    : (accountKeyPem as any);
+ // Reconstruct the client with the *same* account key
+const accountKey = Buffer.from(accountKeyPem);
 
   const client = new acme.Client({
     directoryUrl: ACME_DIRECTORY_URL,
