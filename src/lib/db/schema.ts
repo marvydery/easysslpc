@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, boolean, text, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, boolean, text, pgEnum, integer, unique } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 // Enums
@@ -31,6 +31,29 @@ export const domains = pgTable("domains", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// ACME Challenges Table
+export const acmeChallenges = pgTable(
+  "acme_challenges",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    domain: text("domain").notNull(),
+    token: text("token").notNull(),
+    keyAuthorization: text("key_authorization").notNull(),
+    orderUrl: text("order_url").notNull(),
+    accountKeyPem: text("account_key_pem").notNull(),
+    csrKeyPem: text("csr_key_pem").notNull(),
+    csrDer: text("csr_der").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userDomainUnique: unique().on(table.userId, table.domain),
+    tokenIdx: unique().on(table.token),
+  })
+);
+
 // Certificates Table
 export const certificates = pgTable("certificates", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -45,6 +68,7 @@ export const certificates = pgTable("certificates", {
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   domains: many(domains),
+  acmeChallenges: many(acmeChallenges),
 }));
 
 export const domainsRelations = relations(domains, ({ one, many }) => ({
@@ -53,6 +77,13 @@ export const domainsRelations = relations(domains, ({ one, many }) => ({
     references: [users.id],
   }),
   certificates: many(certificates),
+}));
+
+export const acmeChallengesRelations = relations(acmeChallenges, ({ one }) => ({
+  user: one(users, {
+    fields: [acmeChallenges.userId],
+    references: [users.id],
+  }),
 }));
 
 export const certificatesRelations = relations(certificates, ({ one }) => ({
@@ -67,5 +98,7 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Domain = typeof domains.$inferSelect;
 export type NewDomain = typeof domains.$inferInsert;
+export type AcmeChallenge = typeof acmeChallenges.$inferSelect;
+export type NewAcmeChallenge = typeof acmeChallenges.$inferInsert;
 export type Certificate = typeof certificates.$inferSelect;
 export type NewCertificate = typeof certificates.$inferInsert;
