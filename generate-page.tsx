@@ -178,7 +178,7 @@ export default function GeneratePage() {
           <div className="bg-white rounded-xl shadow p-6">
             <h2 className="text-xl font-bold mb-2">Enter Domain Details</h2>
             <p className="text-gray-600 mb-6">
-              We&apos;ll create a verification challenge for your domain.
+              We'll create a verification challenge for your domain.
             </p>
             <form onSubmit={handleVerifyDomain} className="space-y-4">
               <div>
@@ -289,7 +289,7 @@ export default function GeneratePage() {
                   <li>Create the file at the path shown above</li>
                   <li>Paste the content exactly as shown</li>
                   <li>
-                    Verify it&apos;s accessible:{" "}
+                    Verify it's accessible:{" "}
                     <a
                       href={`http://${domain}${challenge.filePath}`}
                       target="_blank"
@@ -329,7 +329,7 @@ export default function GeneratePage() {
             <Loader2 className="w-16 h-16 text-blue-600 animate-spin mx-auto mb-4" />
             <h2 className="text-xl font-bold mb-2">Generating Your Certificate</h2>
             <p className="text-gray-600">
-              Let&apos;s Encrypt is validating your domain and issuing the certificate.
+              Let's Encrypt is validating your domain and issuing the certificate.
               This may take up to 60 seconds...
             </p>
           </div>

@@ -21,7 +21,7 @@ export const domains = pgTable("domains", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   domainName: varchar("domain_name", { length: 255 }).notNull(),
-  validationMethod: varchar("validation_method", { length: 50 }), // 'dns-01' or 'http-01'
+  validationMethod: varchar("validation_method", { length: 50 }),
   challengeToken: varchar("challenge_token", { length: 255 }),
   challengeValue: text("challenge_value"),
   bridgeSecret: varchar("bridge_secret", { length: 255 }),
@@ -35,7 +35,7 @@ export const domains = pgTable("domains", {
 export const acmeChallenges = pgTable(
   "acme_challenges",
   {
-    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -59,7 +59,7 @@ export const certificates = pgTable("certificates", {
   id: uuid("id").primaryKey().defaultRandom(),
   domainId: uuid("domain_id").notNull().references(() => domains.id, { onDelete: "cascade" }),
   crtBody: text("crt_body").notNull(),
-  keyBodyEncrypted: text("key_body_encrypted").notNull(), // AES-256 encrypted
+  keyBodyEncrypted: text("key_body_encrypted").notNull(),
   caBundle: text("ca_bundle"),
   expiryDate: timestamp("expiry_date").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
