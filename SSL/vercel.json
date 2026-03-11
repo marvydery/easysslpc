@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/renew?key=YOUR_RENEWAL_CRON_KEY",
+      "schedule": "0 2 * * *"
+    }
+  ]
+}
