@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Lock, ArrowLeft, CheckCircle, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { Lock, ArrowLeft, CheckCircle, Copy, ExternalLink, Loader2, XCircle } from "lucide-react";
 
 export default function GeneratePage() {
   const router = useRouter();
@@ -28,6 +28,9 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   useEffect(() => {
     if (domainId) {
@@ -76,6 +79,8 @@ export default function GeneratePage() {
         filePath: `/.well-known/acme-challenge/${data.challenge.token}`,
         fileContent: data.challenge.keyAuthorization,
       });
+      setVerified(false);
+      setVerifyError(null);
       setStep("challenge");
     } catch (err: any) {
       setError(err.message);
@@ -84,7 +89,39 @@ export default function GeneratePage() {
     }
   }
 
+  async function handleVerifyFile() {
+    if (!challenge) return;
+    setVerifying(true);
+    setVerifyError(null);
+    setVerified(false);
+
+    try {
+      const res = await fetch("/api/ssl/challenge/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain,
+          token: challenge.token,
+          keyAuthorization: challenge.keyAuthorization,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setVerifyError(data.error || "Verification failed. Check the file is uploaded correctly.");
+      } else {
+        setVerified(true);
+      }
+    } catch (err: any) {
+      setVerifyError("Could not reach verification endpoint: " + err.message);
+    } finally {
+      setVerifying(false);
+    }
+  }
+
   async function handleGenerateSSL() {
+    if (!verified) return;
     setLoading(true);
     setError(null);
     setStep("generating");
@@ -182,9 +219,7 @@ export default function GeneratePage() {
             </p>
             <form onSubmit={handleVerifyDomain} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Domain Name
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Domain Name</label>
                 <input
                   type="text"
                   value={domain}
@@ -195,9 +230,7 @@ export default function GeneratePage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Address
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
                 <input
                   type="email"
                   value={email}
@@ -222,23 +255,14 @@ export default function GeneratePage() {
                 </label>
               </div>
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                  {error}
-                </div>
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
               )}
               <button
                 type="submit"
                 disabled={loading}
                 className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
               >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Creating Challenge...
-                  </>
-                ) : (
-                  "Verify Domain →"
-                )}
+                {loading ? <><Loader2 className="w-4 h-4 animate-spin" />Creating Challenge...</> : "Verify Domain →"}
               </button>
             </form>
           </div>
@@ -252,73 +276,79 @@ export default function GeneratePage() {
                 Create this file on your web server to prove you own <strong>{domain}</strong>.
               </p>
             </div>
+
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-500 uppercase mb-1">
-                  File Path (create this file)
-                </label>
+                <label className="block text-xs font-medium text-gray-500 uppercase mb-1">File Path</label>
                 <div className="flex items-center gap-2 p-3 bg-gray-50 border rounded-lg font-mono text-sm">
                   <span className="flex-1 break-all">{challenge.filePath}</span>
-                  <button
-                    onClick={() => copyToClipboard(challenge.filePath, "path")}
-                    className="text-blue-600 hover:text-blue-700 flex-shrink-0"
-                  >
+                  <button onClick={() => copyToClipboard(challenge.filePath, "path")} className="text-blue-600 hover:text-blue-700 flex-shrink-0">
                     {copied === "path" ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
+
               <div>
-                <label className="block text-xs font-medium text-gray-500 uppercase mb-1">
-                  File Content (paste this exactly)
-                </label>
+                <label className="block text-xs font-medium text-gray-500 uppercase mb-1">File Content</label>
                 <div className="flex items-center gap-2 p-3 bg-gray-50 border rounded-lg font-mono text-sm">
                   <span className="flex-1 break-all">{challenge.fileContent}</span>
-                  <button
-                    onClick={() => copyToClipboard(challenge.fileContent, "content")}
-                    className="text-blue-600 hover:text-blue-700 flex-shrink-0"
-                  >
+                  <button onClick={() => copyToClipboard(challenge.fileContent, "content")} className="text-blue-600 hover:text-blue-700 flex-shrink-0">
                     {copied === "content" ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
-              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <p className="text-sm text-yellow-800">
-                  <strong>Before clicking Generate SSL:</strong>
-                </p>
-                <ol className="text-sm text-yellow-700 mt-2 space-y-1 list-decimal list-inside">
-                  <li>Create the file at the path shown above</li>
+
+              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+                <p className="font-medium mb-1">Instructions:</p>
+                <ol className="list-decimal list-inside space-y-1 text-yellow-700">
+                  <li>Upload the file to your server at the path above</li>
                   <li>Paste the content exactly as shown</li>
-                  <li>
-                    Verify it&apos;s accessible:{" "}
-                    <a
-                      href={`http://${domain}${challenge.filePath}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline inline-flex items-center gap-1"
-                    >
-                      Test URL <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </li>
+                  <li>Click <strong>Check File is Live</strong> to verify</li>
+                  <li>Once verified, Generate SSL will unlock</li>
                 </ol>
               </div>
             </div>
-            {error && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                {error}
+
+            {/* Check file button */}
+            <button
+              onClick={handleVerifyFile}
+              disabled={verifying}
+              className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {verifying ? <><Loader2 className="w-4 h-4 animate-spin" />Checking...</> : <><ExternalLink className="w-4 h-4" />Check File is Live</>}
+            </button>
+
+            {verified && (
+              <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                File verified! You can now generate your certificate.
               </div>
             )}
+            {verifyError && (
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                {verifyError}
+              </div>
+            )}
+
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
+            )}
+
+            {/* Generate SSL — locked until verified */}
             <button
               onClick={handleGenerateSSL}
-              disabled={loading}
-              className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+              disabled={!verified || loading}
+              className={`w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors ${
+                verified ? "bg-green-600 text-white hover:bg-green-700" : "bg-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
             >
               {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Generating...
-                </>
+                <><Loader2 className="w-4 h-4 animate-spin" />Generating...</>
+              ) : verified ? (
+                <><CheckCircle className="w-4 h-4" />Generate SSL Certificate →</>
               ) : (
-                "Generate SSL Certificate →"
+                <><Lock className="w-4 h-4" />Verify File First to Unlock</>
               )}
             </button>
           </div>
@@ -339,24 +369,16 @@ export default function GeneratePage() {
           <div className="bg-white rounded-xl shadow p-6 text-center space-y-6">
             <div>
               <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                SSL Certificate Generated!
-              </h2>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">SSL Certificate Generated!</h2>
               <p className="text-gray-600">
                 Your certificate for <strong>{domain}</strong> is ready. It expires on{" "}
                 <strong>{new Date(result.expiryDate).toLocaleDateString()}</strong>.
               </p>
             </div>
-            <button
-              onClick={downloadZip}
-              className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-            >
+            <button onClick={downloadZip} className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
               Download Certificates (.zip)
             </button>
-            <Link
-              href="/dashboard"
-              className="block text-blue-600 hover:text-blue-700 font-medium"
-            >
+            <Link href="/dashboard" className="block text-blue-600 hover:text-blue-700 font-medium">
               ← Back to Dashboard
             </Link>
           </div>
