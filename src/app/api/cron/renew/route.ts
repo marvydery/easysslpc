@@ -47,11 +47,10 @@ export async function GET(request: NextRequest) {
         console.log(`Renewing certificate for ${domain.domainName}`);
 
         // Renew SSL certificate
-        const sslResult = await renewSSLCertificate(
-          domain.domainName,
-          user.email,
-          true // Use bridge for renewal
-        );
+        await renewSSLCertificate(
+        domain.domainName,
+        user.email,
+    );
 
         // Encrypt private key
         const encryptedPrivateKey = encrypt(sslResult.privateKey);
