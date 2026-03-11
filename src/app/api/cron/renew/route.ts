@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { users, domains, certificates } from "@/lib/db/schema";
-import { renewSSLCertificate } from "@/lib/acme";
+import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
+import { createAcmeChallenge } from "@/lib/acme";
 import { encrypt } from "@/lib/crypto";
 import { sendCertificateEmail } from "@/lib/email";
 import { eq, and, lte } from "drizzle-orm";
-import JSZip from "jszip";
 
 /**
  * Renewal Cron Job
  * GET /api/cron/renew?key=RENEWAL_CRON_KEY
- * 
- * This endpoint should be called daily by a cron service (e.g., Vercel Cron, GitHub Actions)
- * It checks for domains that need renewal (< 15 days until expiry) and renews them automatically
+ *
+ * For Bridge users: creates a new ACME challenge and stores it in the DB.
+ * The Bridge file (bridge.php) on the user's server will serve the challenge
+ * when Let's Encrypt comes to verify. The actual certificate finalization
+ * happens via a separate follow-up call once the challenge is verified.
+ *
+ * For now this endpoint initiates renewal by creating the challenge.
+ * A second cron (or the same cron on next run) should finalize it.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -22,8 +26,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Find domains that need renewal (next renewal date is today or earlier)
     const today = new Date();
+
+    // Find domains that need renewal
     const domainsToRenew = await db
       .select({
         domain: domains,
@@ -44,72 +49,50 @@ export async function GET(request: NextRequest) {
 
     for (const { domain, user } of domainsToRenew) {
       try {
-        console.log(`Renewing certificate for ${domain.domainName}`);
+        console.log(`Creating renewal challenge for ${domain.domainName}`);
 
-        // Renew SSL certificate
-        await renewSSLCertificate(
-        domain.domainName,
-        user.email,
-    );
+        // Phase 1: Create ACME challenge and store in DB
+        // The bridge.php on the user's server will serve this challenge
+        // when Let's Encrypt comes to verify
+        const challengeInfo = await createAcmeChallenge(domain.domainName, user.email);
 
-        // Encrypt private key
-        const encryptedPrivateKey = encrypt(sslResult.privateKey);
-
-        // Create new certificate record
-        await db.insert(certificates).values({
-          domainId: domain.id,
-          crtBody: sslResult.certificate,
-          keyBodyEncrypted: encryptedPrivateKey,
-          caBundle: sslResult.caCertificate,
-          expiryDate: sslResult.expiryDate,
-        });
-
-        // Update next renewal date (75 days from now)
-        const nextRenewalDate = new Date();
-        nextRenewalDate.setDate(nextRenewalDate.getDate() + 75);
-
+        // Store challenge in DB (upsert)
         await db
-          .update(domains)
-          .set({ nextRenewalDate })
-          .where(eq(domains.id, domain.id));
-
-        // Create ZIP file with certificates
-        const zip = new JSZip();
-        zip.file(`${domain.domainName}.crt`, sslResult.certificate);
-        zip.file(`${domain.domainName}.key`, sslResult.privateKey);
-        if (sslResult.caCertificate) {
-          zip.file(`${domain.domainName}-ca-bundle.crt`, sslResult.caCertificate);
-        }
-        zip.file("README.txt", `SSL Certificate for ${domain.domainName}
-
-Certificate: ${domain.domainName}.crt
-Private Key: ${domain.domainName}.key
-CA Bundle: ${domain.domainName}-ca-bundle.crt
-
-This is an automatically renewed certificate.
-
-Certificate expires: ${sslResult.expiryDate.toLocaleDateString()}
-Next renewal: ${nextRenewalDate.toLocaleDateString()}
-`);
-
-        const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
-
-        // Send email with new certificate
-        await sendCertificateEmail(
-          user.email,
-          domain.domainName,
-          zipBuffer
-        );
+          .insert(acmeChallenges)
+          .values({
+            userId: user.id,
+            domain: domain.domainName,
+            token: challengeInfo.token,
+            keyAuthorization: challengeInfo.keyAuthorization,
+            orderUrl: challengeInfo.orderUrl,
+            accountKeyPem: challengeInfo.accountKeyPem,
+            csrKeyPem: challengeInfo.csrKeyPem,
+            csrDer: challengeInfo.csrDer.toString("base64"),
+            createdAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: [acmeChallenges.userId, acmeChallenges.domain],
+            set: {
+              token: challengeInfo.token,
+              keyAuthorization: challengeInfo.keyAuthorization,
+              orderUrl: challengeInfo.orderUrl,
+              accountKeyPem: challengeInfo.accountKeyPem,
+              csrKeyPem: challengeInfo.csrKeyPem,
+              csrDer: challengeInfo.csrDer.toString("base64"),
+              createdAt: new Date(),
+            },
+          });
 
         results.push({
           domain: domain.domainName,
-          status: "success",
-          expiryDate: sslResult.expiryDate,
+          status: "challenge_created",
+          token: challengeInfo.token,
+          message: "Challenge created. Bridge will serve it for verification.",
         });
 
-        console.log(`Successfully renewed certificate for ${domain.domainName}`);
+        console.log(`Challenge created for ${domain.domainName}, token: ${challengeInfo.token}`);
       } catch (error: any) {
-        console.error(`Failed to renew ${domain.domainName}:`, error);
+        console.error(`Failed to create renewal challenge for ${domain.domainName}:`, error);
         results.push({
           domain: domain.domainName,
           status: "failed",
@@ -120,7 +103,8 @@ Next renewal: ${nextRenewalDate.toLocaleDateString()}
 
     return NextResponse.json({
       success: true,
-      renewed: results.filter((r) => r.status === "success").length,
+      processed: domainsToRenew.length,
+      challenged: results.filter((r) => r.status === "challenge_created").length,
       failed: results.filter((r) => r.status === "failed").length,
       results,
     });
