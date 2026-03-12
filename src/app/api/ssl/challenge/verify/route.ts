@@ -104,9 +104,8 @@ export async function POST(request: NextRequest) {
     // All rows share the same order / account key / CSR — use first row
     const { orderUrl, accountKeyPem, csrKeyPem, csrDer } = storedChallenges[0];
 
-    // Rebuild ACME client from stored PEM — acme-client accepts a KeyObject
-    const { createPrivateKey } = await import("crypto");
-    const accountKey = createPrivateKey(accountKeyPem);
+    // acme-client accepts the PEM string directly as accountKey
+    const accountKey = accountKeyPem;
     const client = new acme.Client({
       directoryUrl: ACME_DIRECTORY_URL,
       accountKey,
