@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
-import { users, domains } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { users, domains, acmeChallenges } from "@/lib/db/schema";
+import { eq, count, and, inArray } from "drizzle-orm";
+import { getDomainLimit } from "@/lib/plans";
+import { buildDomainList } from "@/lib/acme";
 import * as acme from "acme-client";
 
+const ACME_DIRECTORY_URL =
+  process.env.ACME_DIRECTORY_URL ||
+  "https://acme-v02.api.letsencrypt.org/directory";
+
 /**
- * POST /api/ssl/challenge/check
- * Body: { domainId: string, email: string }
- * ONLY verifies the challenge with Let's Encrypt (does NOT generate SSL yet)
+ * POST /api/ssl/challenge/create
+ * Body: { domain, email, includeWww? }
+ * Creates an ACME order, persists challenge data to acme_challenges table,
+ * and returns the challenge file details for the user to upload.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -18,11 +25,11 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { domainId, email } = body;
+    const { domain: domainName, email, includeWww = false } = body;
 
-    if (!domainId || !email) {
+    if (!domainName || !email) {
       return NextResponse.json(
-        { error: "Domain ID and email are required" },
+        { error: "Domain and email are required" },
         { status: 400 }
       );
     }
@@ -38,102 +45,162 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Get domain record
-    const [domain] = await db
+    // Check domain limit
+    if (!user.isAdmin) {
+      const limit = getDomainLimit(user.subscriptionTier, user.isAdmin);
+      const [{ value: domainCount }] = await db
+        .select({ value: count() })
+        .from(domains)
+        .where(eq(domains.userId, user.id));
+
+      if (domainCount >= limit) {
+        return NextResponse.json(
+          {
+            error: `Domain limit reached. Your ${user.subscriptionTier} plan allows up to ${limit} domain${
+              limit === 1 ? "" : "s"
+            }. Please upgrade to add more.`,
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    const domainList = buildDomainList(domainName, includeWww);
+
+    // Create ACME client + account key — persisted so finalize can resume
+    const accountKey = await acme.crypto.createPrivateKey();
+    const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
+
+    await client.createAccount({
+      termsOfServiceAgreed: true,
+      contact: [`mailto:${email}`],
+    });
+
+    // Single CSR / order covering all domains
+    const [csrKey, csr] = await acme.crypto.createCsr({
+      commonName: domainList[0],
+      altNames: domainList.length > 1 ? domainList : undefined,
+    });
+
+    const order = await client.createOrder({
+      identifiers: domainList.map((d) => ({ type: "dns", value: d })),
+    });
+
+    const authorizations = await client.getAuthorizations(order);
+
+    // Upsert domain record (apex domain only)
+    const existingDomains = await db
       .select()
       .from(domains)
-      .where(eq(domains.id, domainId))
+      .where(and(eq(domains.userId, user.id), eq(domains.domainName, domainList[0])))
       .limit(1);
 
-    if (!domain || domain.userId !== user.id) {
-      return NextResponse.json(
-        { error: "Domain not found or access denied" },
-        { status: 404 }
-      );
+    let domainRecord;
+    if (existingDomains.length > 0) {
+      const [updated] = await db
+        .update(domains)
+        .set({ validationMethod: "http-01", updatedAt: new Date() })
+        .where(eq(domains.id, existingDomains[0].id))
+        .returning();
+      domainRecord = updated;
+    } else {
+      const [created] = await db
+        .insert(domains)
+        .values({
+          userId: user.id,
+          domainName: domainList[0],
+          validationMethod: "http-01",
+        })
+        .returning();
+      domainRecord = created;
     }
 
-    if (!domain.validationMethod || !domain.challengeToken || !domain.challengeValue) {
-      return NextResponse.json(
-        { error: "Challenge not initialized for this domain" },
-        { status: 400 }
+    // Clear stale challenge rows for these domains
+    await db
+      .delete(acmeChallenges)
+      .where(
+        and(
+          eq(acmeChallenges.userId, user.id),
+          inArray(acmeChallenges.domain, domainList)
+        )
       );
-    }
 
-    // First, verify the file is accessible via HTTP
-    const verificationUrl = `http://${domain.domainName}/.well-known/acme-challenge/${domain.challengeToken}`;
-    
-    try {
-      console.log(`Checking verification URL: ${verificationUrl}`);
-      const response = await fetch(verificationUrl, {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'EasySSL-Verification/1.0'
-        },
-        redirect: 'follow'
+    // Persist one row per domain into acme_challenges
+    const challenges: Array<{
+      domain: string;
+      token: string;
+      keyAuthorization: string;
+      filePath: string;
+      fileContent: string;
+    }> = [];
+
+    for (const auth of authorizations) {
+      const challenge = auth.challenges.find((c: any) => c.type === "http-01");
+      if (!challenge) {
+        return NextResponse.json(
+          { error: `No HTTP-01 challenge available for ${auth.identifier.value}` },
+          { status: 400 }
+        );
+      }
+
+      const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
+
+      await db.insert(acmeChallenges).values({
+        userId: user.id,
+        domain: auth.identifier.value,
+        token: challenge.token,
+        keyAuthorization,
+        orderUrl: order.url,
+        accountKeyPem: accountKey.toString(),
+        csrKeyPem: csrKey.toString(),
+        csrDer: csr.toString("base64"),
       });
 
-      if (!response.ok) {
-        return NextResponse.json(
-          {
-            error: `File not accessible (HTTP ${response.status}). Please ensure the file is uploaded correctly.`,
-            verificationUrl,
-            hint: "Try opening the verification URL in your browser. You should see the file content.",
-          },
-          { status: 400 }
-        );
+      // Also keep challengeToken/Value on domain row for backward compat
+      if (auth.identifier.value === domainList[0]) {
+        await db
+          .update(domains)
+          .set({
+            challengeToken: challenge.token,
+            challengeValue: keyAuthorization,
+            updatedAt: new Date(),
+          })
+          .where(eq(domains.id, domainRecord.id));
       }
 
-      const content = await response.text();
-      
-      // Verify the content matches what we expect
-      if (!content.trim().startsWith(domain.challengeValue.trim())) {
-        return NextResponse.json(
-          {
-            error: "File content doesn't match expected value. Please re-download and upload the file.",
-            expected: domain.challengeValue.substring(0, 50) + "...",
-            received: content.substring(0, 50) + "...",
-          },
-          { status: 400 }
-        );
-      }
-
-      console.log(`File verified successfully at ${verificationUrl}`);
-      
-    } catch (err: any) {
-      console.error("File verification error:", err);
-      return NextResponse.json(
-        {
-          error: "Cannot access verification file. Please ensure it's uploaded correctly.",
-          verificationUrl,
-          details: err.message,
-          hint: "Make sure your domain is pointing to your server and the file is in the correct location.",
-        },
-        { status: 400 }
-      );
+      challenges.push({
+        domain: auth.identifier.value,
+        token: challenge.token,
+        keyAuthorization,
+        filePath: `/.well-known/acme-challenge/${challenge.token}`,
+        fileContent: keyAuthorization,
+      });
     }
-
-    // Update domain to mark as verified (but don't generate SSL yet)
-    // Note: We keep challenge data for SSL generation step
-    await db
-      .update(domains)
-      .set({
-        updatedAt: new Date(),
-      })
-      .where(eq(domains.id, domain.id));
 
     return NextResponse.json({
       success: true,
-      message: "Domain verified successfully! You can now generate your SSL certificate.",
-      domainId: domain.id,
-      domainName: domain.domainName,
+      domainId: domainRecord.id,
+      // Primary challenge (single-domain compat)
+      challengeToken: challenges[0].token,
+      challengeValue: challenges[0].keyAuthorization,
+      verificationUrl: `http://${challenges[0].domain}/.well-known/acme-challenge/${challenges[0].token}`,
+      // All challenges for www+non-www
+      challenges,
+      instructions: {
+        type: "HTTP File Upload",
+        steps: challenges.flatMap((ch) => [
+          `For ${ch.domain}:`,
+          `  • Upload a file named: ${ch.token}`,
+          `  • To: public_html/.well-known/acme-challenge/`,
+          `  • Containing exactly: ${ch.keyAuthorization}`,
+          `  • Test at: http://${ch.domain}${ch.filePath}`,
+        ]),
+      },
     });
   } catch (error: any) {
-    console.error("Challenge verification error:", error);
+    console.error("Challenge creation error:", error);
     return NextResponse.json(
-      {
-        error: error.message || "Verification failed",
-        hint: "Make sure you've completed the DNS/HTTP challenge setup correctly.",
-      },
+      { error: error.message || "Failed to create challenge" },
       { status: 500 }
     );
   }
