@@ -39,6 +39,9 @@ export default function GeneratePage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
   // Pre-fill from existing domain record if domainId is in query
@@ -94,6 +97,34 @@ export default function GeneratePage() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleVerifyFiles() {
+    setVerifying(true);
+    setVerifyError(null);
+    setVerified(false);
+
+    try {
+      const res = await fetch("/api/ssl/challenge/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domainId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        const details = data.details
+          ? data.details.map((d: any) => `${d.domain}: ${d.error}`).join("\n")
+          : data.error;
+        setVerifyError(details);
+      } else {
+        setVerified(true);
+      }
+    } catch (err: any) {
+      setVerifyError("Network error — please try again");
+    } finally {
+      setVerifying(false);
     }
   }
 
@@ -383,7 +414,7 @@ export default function GeneratePage() {
             {/* Instructions */}
             <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg space-y-2">
               <p className="text-sm font-semibold text-yellow-800">
-                Before clicking Generate SSL:
+                Steps to complete:
               </p>
               <ol className="text-sm text-yellow-700 space-y-1.5 list-decimal list-inside">
                 <li>
@@ -395,7 +426,7 @@ export default function GeneratePage() {
                   </code>
                 </li>
                 <li>
-                  Confirm{" "}
+                  Click <strong>Verify Files</strong> — we'll confirm{" "}
                   {challenges.map((ch, i) => (
                     <span key={ch.token}>
                       {i > 0 && i < challenges.length - 1 && ", "}
@@ -413,8 +444,43 @@ export default function GeneratePage() {
                   ))}{" "}
                   {challenges.length > 1 ? "are" : "is"} accessible
                 </li>
+                <li>Once verified, click <strong>Generate SSL Certificate</strong></li>
               </ol>
             </div>
+
+            {/* Verify Files button */}
+            {!verified && (
+              <button
+                onClick={handleVerifyFiles}
+                disabled={verifying}
+                className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {verifying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Checking files...
+                  </>
+                ) : (
+                  "Verify Files →"
+                )}
+              </button>
+            )}
+
+            {/* Verify error */}
+            {verifyError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm whitespace-pre-line">
+                <p className="font-medium mb-1">Verification failed:</p>
+                {verifyError}
+              </div>
+            )}
+
+            {/* Verified success message */}
+            {verified && (
+              <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                Files verified! Let's Encrypt can reach your domain. You can now generate your certificate.
+              </div>
+            )}
 
             {error && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -422,10 +488,11 @@ export default function GeneratePage() {
               </div>
             )}
 
+            {/* Generate SSL — only enabled after verification */}
             <button
               onClick={handleGenerateSSL}
-              disabled={loading}
-              className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+              disabled={!verified || loading}
+              className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <>
