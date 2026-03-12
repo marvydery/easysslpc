@@ -426,7 +426,7 @@ export default function GeneratePage() {
                   </code>
                 </li>
                 <li>
-                  Click <strong>Verify Files</strong> — we'll confirm{" "}
+                  Click <strong>Verify Files</strong> — we&apos;ll confirm{" "}
                   {challenges.map((ch, i) => (
                     <span key={ch.token}>
                       {i > 0 && i < challenges.length - 1 && ", "}
@@ -478,7 +478,7 @@ export default function GeneratePage() {
             {verified && (
               <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                Files verified! Let's Encrypt can reach your domain. You can now generate your certificate.
+                Files verified! Let&apos;s Encrypt can reach your domain. You can now generate your certificate.
               </div>
             )}
 
