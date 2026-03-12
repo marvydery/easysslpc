@@ -24,7 +24,7 @@ interface ChallengeInfo {
 
 export default function GeneratePage() {
   const searchParams = useSearchParams();
-  const domainId = searchParams.get("domainId");
+  const domainIdParam = searchParams.get("domainId");
 
   const [step, setStep] = useState<"form" | "challenge" | "generating" | "done">("form");
   const [domain, setDomain] = useState("");
@@ -43,14 +43,15 @@ export default function GeneratePage() {
 
   // Pre-fill from existing domain record if domainId is in query
   useEffect(() => {
-    if (!domainId) return;
-    fetch(`/api/domains/${domainId}`)
+    if (!domainIdParam) return;
+    fetch(`/api/domains/${domainIdParam}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.domain) {
           setDomain(data.domain.domainName);
           setEmail(data.userEmail || "");
           if (data.domain.challengeToken && data.domain.challengeValue) {
+            setDomainId(data.domain.id);
             setChallenges([
               {
                 domain: data.domain.domainName,
@@ -65,7 +66,9 @@ export default function GeneratePage() {
         }
       })
       .catch(console.error);
-  }, [domainId]);
+  }, [domainIdParam]);
+
+  const [domainId, setDomainId] = useState<string | null>(null);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -75,15 +78,16 @@ export default function GeneratePage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/ssl/generate", {
+      const res = await fetch("/api/ssl/challenge/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain, email, useBridge, includeWww, action: "prepare" }),
+        body: JSON.stringify({ domain, email, includeWww }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create challenge");
 
+      setDomainId(data.domainId);
       setChallenges(data.challenges);
       setStep("challenge");
     } catch (err: any) {
@@ -99,10 +103,10 @@ export default function GeneratePage() {
     setStep("generating");
 
     try {
-      const res = await fetch("/api/ssl/generate", {
+      const res = await fetch("/api/ssl/challenge/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain, email, useBridge, includeWww, action: "finalize" }),
+        body: JSON.stringify({ domainId, email }),
       });
 
       const data = await res.json();
