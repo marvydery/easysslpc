@@ -13,9 +13,7 @@ const ACME_DIRECTORY_URL =
 
 /**
  * POST /api/ssl/challenge/create
- * Body: { domain, email, includeWww? }
- * Creates an ACME order, persists challenge data to acme_challenges table,
- * and returns the challenge file details for the user to upload.
+ * Creates an ACME order, stores ALL challenge data to DB, returns file details.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -34,7 +32,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get user
     const [user] = await db
       .select()
       .from(users)
@@ -45,7 +42,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Check domain limit
     if (!user.isAdmin) {
       const limit = getDomainLimit(user.subscriptionTier, user.isAdmin);
       const [{ value: domainCount }] = await db
@@ -66,8 +62,9 @@ export async function POST(request: NextRequest) {
     }
 
     const domainList = buildDomainList(domainName, includeWww);
+    const apexDomain = domainList[0];
 
-    // Create ACME client + account key — persisted so finalize can resume
+    // Create ACME client
     const accountKey = await acme.crypto.createPrivateKey();
     const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
 
@@ -76,9 +73,9 @@ export async function POST(request: NextRequest) {
       contact: [`mailto:${email}`],
     });
 
-    // Single CSR / order covering all domains
+    // Create CSR covering all domains
     const [csrKey, csr] = await acme.crypto.createCsr({
-      commonName: domainList[0],
+      commonName: apexDomain,
       altNames: domainList.length > 1 ? domainList : undefined,
     });
 
@@ -88,11 +85,11 @@ export async function POST(request: NextRequest) {
 
     const authorizations = await client.getAuthorizations(order);
 
-    // Upsert domain record (apex domain only)
+    // Upsert domain record
     const existingDomains = await db
       .select()
       .from(domains)
-      .where(and(eq(domains.userId, user.id), eq(domains.domainName, domainList[0])))
+      .where(and(eq(domains.userId, user.id), eq(domains.domainName, apexDomain)))
       .limit(1);
 
     let domainRecord;
@@ -106,16 +103,12 @@ export async function POST(request: NextRequest) {
     } else {
       const [created] = await db
         .insert(domains)
-        .values({
-          userId: user.id,
-          domainName: domainList[0],
-          validationMethod: "http-01",
-        })
+        .values({ userId: user.id, domainName: apexDomain, validationMethod: "http-01" })
         .returning();
       domainRecord = created;
     }
 
-    // Clear stale challenge rows for these domains
+    // Clear stale challenge rows
     await db
       .delete(acmeChallenges)
       .where(
@@ -125,7 +118,7 @@ export async function POST(request: NextRequest) {
         )
       );
 
-    // Persist one row per domain into acme_challenges
+    // Persist challenge rows — one per domain
     const challenges: Array<{
       domain: string;
       token: string;
@@ -138,7 +131,7 @@ export async function POST(request: NextRequest) {
       const challenge = auth.challenges.find((c: any) => c.type === "http-01");
       if (!challenge) {
         return NextResponse.json(
-          { error: `No HTTP-01 challenge available for ${auth.identifier.value}` },
+          { error: `No HTTP-01 challenge for ${auth.identifier.value}` },
           { status: 400 }
         );
       }
@@ -156,15 +149,11 @@ export async function POST(request: NextRequest) {
         csrDer: csr.toString("base64"),
       });
 
-      // Also keep challengeToken/Value on domain row for backward compat
-      if (auth.identifier.value === domainList[0]) {
+      // Keep domain row in sync for apex
+      if (auth.identifier.value === apexDomain) {
         await db
           .update(domains)
-          .set({
-            challengeToken: challenge.token,
-            challengeValue: keyAuthorization,
-            updatedAt: new Date(),
-          })
+          .set({ challengeToken: challenge.token, challengeValue: keyAuthorization, updatedAt: new Date() })
           .where(eq(domains.id, domainRecord.id));
       }
 
@@ -180,22 +169,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       domainId: domainRecord.id,
-      // Primary challenge (single-domain compat)
-      challengeToken: challenges[0].token,
-      challengeValue: challenges[0].keyAuthorization,
-      verificationUrl: `http://${challenges[0].domain}/.well-known/acme-challenge/${challenges[0].token}`,
-      // All challenges for www+non-www
       challenges,
-      instructions: {
-        type: "HTTP File Upload",
-        steps: challenges.flatMap((ch) => [
-          `For ${ch.domain}:`,
-          `  • Upload a file named: ${ch.token}`,
-          `  • To: public_html/.well-known/acme-challenge/`,
-          `  • Containing exactly: ${ch.keyAuthorization}`,
-          `  • Test at: http://${ch.domain}${ch.filePath}`,
-        ]),
-      },
+      challenge: challenges[0],
     });
   } catch (error: any) {
     console.error("Challenge creation error:", error);
