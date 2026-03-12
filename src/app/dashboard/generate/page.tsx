@@ -63,12 +63,17 @@ export default function GeneratePage() {
         setError(null);
 
         try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 55000);
+
           const res = await fetch("/api/ssl/challenge/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ domain: domainName, email: userEmail, includeWww: false }),
+            signal: controller.signal,
           });
 
+          clearTimeout(timeout);
           const result = await res.json();
           if (!res.ok) throw new Error(result.error || "Failed to create challenge");
 
@@ -76,7 +81,12 @@ export default function GeneratePage() {
           setChallenges(result.challenges);
           setStep("challenge");
         } catch (err: any) {
-          setError(err.message);
+          if (err.name === "AbortError") {
+            setError("Request timed out. Let\'s Encrypt took too long to respond. Please try again.");
+          } else {
+            setError(err.message);
+          }
+          setAutoLoading(false);
         } finally {
           setAutoLoading(false);
         }
@@ -94,11 +104,16 @@ export default function GeneratePage() {
     setError(null);
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 55000);
+
       const res = await fetch("/api/ssl/challenge/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ domain, email, includeWww }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create challenge");
