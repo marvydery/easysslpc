@@ -42,6 +42,59 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
   };
 }
 
+// ─── createAcmeChallenge — used by cron/renew to set up Bridge renewal ────────
+
+export interface AcmeChallengeInfo {
+  token: string;
+  keyAuthorization: string;
+  orderUrl: string;
+  accountKeyPem: string;
+  csrKeyPem: string;
+  csrDer: Buffer;
+}
+
+/**
+ * Creates an ACME order for a single domain and returns all the serialisable
+ * data needed to resume it later (stored in acme_challenges table by the cron).
+ * The Bridge file on the user's server will serve the challenge file when
+ * Let's Encrypt comes to verify.
+ */
+export async function createAcmeChallenge(
+  domain: string,
+  email: string
+): Promise<AcmeChallengeInfo> {
+  const accountKey = await acme.crypto.createPrivateKey();
+  const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
+
+  await client.createAccount({
+    termsOfServiceAgreed: true,
+    contact: [`mailto:${email}`],
+  });
+
+  const [csrKey, csr] = await acme.crypto.createCsr({ commonName: domain });
+
+  const order = await client.createOrder({
+    identifiers: [{ type: "dns", value: domain }],
+  });
+
+  const authorizations = await client.getAuthorizations(order);
+  const auth = authorizations[0];
+  const challenge = auth.challenges.find((c: any) => c.type === "http-01");
+
+  if (!challenge) throw new Error(`No HTTP-01 challenge available for ${domain}`);
+
+  const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
+
+  return {
+    token: challenge.token,
+    keyAuthorization,
+    orderUrl: order.url,
+    accountKeyPem: accountKey.toString(),
+    csrKeyPem: csrKey.toString(),
+    csrDer: csr, // Buffer — cron stores as base64
+  };
+}
+
 // ─── One-shot generation (used by Bridge / cron renew) ───────────────────────
 
 /**
