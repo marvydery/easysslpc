@@ -74,7 +74,7 @@ export default function GeneratePage() {
           setDomainId(result.domainId);
           setChallenges(result.challenges);
           setStep("challenge");
-        } catch (err) {
+        } catch (err: any) {
           setError(err.message);
         } finally {
           setLoading(false);
