@@ -42,6 +42,7 @@ export default function GeneratePage() {
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [autoLoading, setAutoLoading] = useState(!!domainIdParam);
   const [copied, setCopied] = useState<string | null>(null);
 
   // When arriving via "Complete Verification" link, auto-restart challenge
@@ -58,7 +59,7 @@ export default function GeneratePage() {
 
         setDomain(domainName);
         setEmail(userEmail);
-        setLoading(true);
+        setAutoLoading(true);
         setError(null);
 
         try {
@@ -77,7 +78,7 @@ export default function GeneratePage() {
         } catch (err: any) {
           setError(err.message);
         } finally {
-          setLoading(false);
+          setAutoLoading(false);
         }
       })
       .catch(console.error);
@@ -249,7 +250,7 @@ export default function GeneratePage() {
         {/* ── FORM ── */}
         {step === "form" && (
           <div className="bg-white rounded-xl shadow p-6">
-            {domainIdParam && loading ? (
+            {autoLoading ? (
               <div className="py-12 text-center">
                 <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto mb-3" />
                 <p className="text-gray-600">Preparing verification challenge...</p>
