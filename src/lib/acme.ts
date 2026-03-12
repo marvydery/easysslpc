@@ -4,10 +4,10 @@ const ACME_DIRECTORY_URL =
   process.env.ACME_DIRECTORY_URL ||
   "https://acme-v02.api.letsencrypt.org/directory";
 
-// ─── Bridge in-memory store (only used during a single request lifetime) ──────
+// ─── Bridge in-memory store ───────────────────────────────────────────────────
+// Only lives for the duration of a single request — used by one-shot generate
 
 const challengeStore = new Map<string, string>();
-
 export function storeChallenge(domain: string, token: string, keyAuthorization: string) {
   challengeStore.set(`${domain}:${token}`, keyAuthorization);
 }
@@ -18,33 +18,20 @@ export function clearChallenge(domain: string, token: string) {
   challengeStore.delete(`${domain}:${token}`);
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Shared helper — exported so routes can use it ────────────────────────────
 
-export interface PreparedChallenge {
-  domain: string;
-  token: string;
-  keyAuthorization: string;
-  filePath: string;
-  fileContent: string;
-  /** Serialised state needed to resume this challenge later */
-  orderUrl: string;
-  accountKeyPem: string;
-  csrKeyPem: string;
-  csrDer: string; // base64
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
+/**
+ * Returns the list of domains to include in the certificate.
+ * When includeWww=true, always returns [apex, www.apex].
+ */
 export function buildDomainList(domain: string, includeWww: boolean): string[] {
   if (!includeWww) return [domain];
-  const isWww = domain.startsWith("www.");
-  const apex = isWww ? domain.slice(4) : domain;
-  const www = `www.${apex}`;
-  // apex first → becomes commonName
-  return [apex, www];
+  const apex = domain.startsWith("www.") ? domain.slice(4) : domain;
+  return [apex, `www.${apex}`];
 }
 
-/** Correctly split a PEM chain into leaf cert + CA bundle */
+// ─── Parse a PEM certificate chain ───────────────────────────────────────────
+
 function parseCertChain(chain: string): { certificate: string; caCertificate: string } {
   const blocks =
     chain.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
@@ -55,31 +42,41 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
   };
 }
 
-// ─── Step 1: Prepare — create ACME order, return serialisable challenge data ──
+// ─── One-shot generation (used by Bridge / cron renew) ───────────────────────
 
 /**
- * Creates an ACME order for all requested domains and returns the http-01
- * challenge details for each domain.  All state needed to resume the order
- * is returned as plain strings so the caller can persist them to the DB.
+ * Generates an SSL certificate in a single request.
+ * Only suitable for the Bridge auto-renew path where the server itself
+ * serves the challenge file automatically.
  */
-export async function prepareSSLChallenges(
+export async function generateSSLCertificate(
   domain: string,
   email: string,
+  useBridge: boolean = false,
   includeWww: boolean = false
-): Promise<PreparedChallenge[]> {
+): Promise<{
+  certificate: string;
+  privateKey: string;
+  caCertificate: string;
+  expiryDate: Date;
+}> {
   const domainList = buildDomainList(domain, includeWww);
 
-  // One ACME client / account key covers the whole order
   const accountKey = await acme.crypto.createPrivateKey();
-  const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
+  const client = new acme.Client({
+    directoryUrl: ACME_DIRECTORY_URL,
+    accountKey,
+    backoffAttempts: 5,
+    backoffMin: 3000,
+    backoffMax: 15000,
+  });
 
   await client.createAccount({
     termsOfServiceAgreed: true,
     contact: [`mailto:${email}`],
   });
 
-  // Single CSR covering all domains (SAN)
-  const [csrKey, csr] = await acme.crypto.createCsr({
+  const [key, csr] = await acme.crypto.createCsr({
     commonName: domainList[0],
     altNames: domainList.length > 1 ? domainList : undefined,
   });
@@ -89,7 +86,6 @@ export async function prepareSSLChallenges(
   });
 
   const authorizations = await client.getAuthorizations(order);
-  const results: PreparedChallenge[] = [];
 
   for (const auth of authorizations) {
     const challenge = auth.challenges.find((c: any) => c.type === "http-01");
@@ -97,81 +93,20 @@ export async function prepareSSLChallenges(
 
     const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
 
-    results.push({
-      domain: auth.identifier.value,
-      token: challenge.token,
-      keyAuthorization,
-      filePath: `/.well-known/acme-challenge/${challenge.token}`,
-      fileContent: keyAuthorization,
-      // Serialisable state — stored to DB so finalize works across serverless invocations
-      orderUrl: order.url,
-      accountKeyPem: accountKey.toString(),
-      csrKeyPem: csrKey.toString(),
-      csrDer: csr.toString("base64"),
-    });
-  }
-
-  return results;
-}
-
-// ─── Step 2: Finalize — resume order from DB data, validate, issue cert ───────
-
-export interface StoredChallenge {
-  domain: string;
-  token: string;
-  keyAuthorization: string;
-  orderUrl: string;
-  accountKeyPem: string;
-  csrKeyPem: string;
-  csrDer: string; // base64
-}
-
-/**
- * Resumes an ACME order using data previously stored in the DB, validates
- * all http-01 challenges, and returns the issued certificate.
- */
-export async function finalizeSSLCertificate(
-  storedChallenges: StoredChallenge[],
-  useBridge: boolean = false
-): Promise<{
-  certificate: string;
-  privateKey: string;
-  caCertificate: string;
-  expiryDate: Date;
-}> {
-  if (storedChallenges.length === 0) throw new Error("No stored challenges provided");
-
-  // All challenges share the same order / account key / CSR
-  const { orderUrl, accountKeyPem, csrKeyPem, csrDer } = storedChallenges[0];
-
-  const accountKey = await acme.crypto.createPrivateKey(accountKeyPem);
-  const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
-
-  // Re-register (idempotent — ACME allows this)
-  await client.createAccount({ termsOfServiceAgreed: true });
-
-  // Reconstruct order reference
-  const order = { url: orderUrl } as acme.Order;
-  const authorizations = await client.getAuthorizations(order);
-
-  for (const auth of authorizations) {
-    const challenge = auth.challenges.find((c: any) => c.type === "http-01");
-    if (!challenge) throw new Error(`No HTTP-01 challenge for ${auth.identifier.value}`);
-
-    const stored = storedChallenges.find((s) => s.domain === auth.identifier.value);
-    if (!stored) throw new Error(`No stored data for ${auth.identifier.value}`);
-
-    if (useBridge) storeChallenge(stored.domain, stored.token, stored.keyAuthorization);
+    if (useBridge) {
+      storeChallenge(auth.identifier.value, challenge.token, keyAuthorization);
+    }
 
     await client.verifyChallenge(auth, challenge);
     await client.completeChallenge(challenge);
     await client.waitForValidStatus(challenge);
 
-    if (useBridge) clearChallenge(stored.domain, stored.token);
+    if (useBridge) {
+      clearChallenge(auth.identifier.value, challenge.token);
+    }
   }
 
-  const csrBuffer = Buffer.from(csrDer, "base64");
-  await client.finalizeOrder(order, csrBuffer);
+  await client.finalizeOrder(order, csr);
   const cert = await client.getCertificate(order);
 
   const { certificate, caCertificate } = parseCertChain(cert);
@@ -181,22 +116,10 @@ export async function finalizeSSLCertificate(
 
   return {
     certificate,
-    privateKey: csrKeyPem,
+    privateKey: key.toString(),
     caCertificate,
     expiryDate,
   };
-}
-
-// ─── Legacy one-shot (used by renewals) ──────────────────────────────────────
-
-export async function generateSSLCertificate(
-  domain: string,
-  email: string,
-  useBridge: boolean = false,
-  includeWww: boolean = false
-) {
-  const challenges = await prepareSSLChallenges(domain, email, includeWww);
-  return finalizeSSLCertificate(challenges, useBridge);
 }
 
 export async function renewSSLCertificate(
