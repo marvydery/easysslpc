@@ -21,7 +21,7 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
     chain.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
   if (blocks.length === 0) return { certificate: chain.trim(), caCertificate: "" };
   return {
-    certificate: blocks[0],
+    certificate: blocks[0] as string,
     caCertificate: blocks.slice(1).join("\n"),
   };
 }
