@@ -2,24 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
-import { createAcmeChallenge, finaliseAcmeOrder } from "@/lib/acme";
+import { prepareSSLChallenges, finalizeSSLCertificate, buildDomainList } from "@/lib/acme";
 import { encrypt, generateBridgeSecret } from "@/lib/crypto";
 import { getDomainLimit } from "@/lib/plans";
-import { eq, count, and } from "drizzle-orm";
+import { eq, count, and, inArray } from "drizzle-orm";
 import JSZip from "jszip";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/ssl/generate
-//
-// Two-phase flow controlled by the `action` field in the request body:
-//
-//   action: "prepare"  → Phase 1: create ACME order, return challenge token
-//                         so the user (or bridge) can serve the file.
-//
-//   action: "finalize" → Phase 2: tell Let's Encrypt to validate, issue cert.
-//                         Must be called AFTER the challenge file is live.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/**
+ * POST /api/ssl/generate
+ *
+ * action: "prepare"
+ *   → Creates ACME order, stores challenge rows in acme_challenges table,
+ *     returns challenge details so the user can place the verification file.
+ *
+ * action: "finalize"
+ *   → Reads challenge rows from DB, validates ownership with Let's Encrypt,
+ *     issues cert, saves domain + certificate records, returns ZIP.
+ */
 export async function POST(request: NextRequest) {
   try {
     const { userId } = auth();
@@ -28,18 +27,17 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { domain: domainName, email, useBridge, action = "prepare" } = body;
+    const {
+      action = "finalize",
+      domain: domainName,
+      email,
+      useBridge = false,
+      includeWww = false,
+    } = body;
 
     if (!domainName || !email) {
       return NextResponse.json(
         { error: "Domain and email are required" },
-        { status: 400 }
-      );
-    }
-
-    if (!["prepare", "finalize"].includes(action)) {
-      return NextResponse.json(
-        { error: 'action must be "prepare" or "finalize"' },
         { status: 400 }
       );
     }
@@ -55,26 +53,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // ── Enforce domain limit (on prepare only to avoid double-counting) ─────
-    if (!user.isAdmin && action === "prepare") {
-      const limit = getDomainLimit(user.subscriptionTier, false);
-      const [{ value: domainCount }] = await db
-        .select({ value: count() })
-        .from(domains)
-        .where(eq(domains.userId, user.id));
-
-      if (domainCount >= limit) {
-        return NextResponse.json(
-          {
-            error: `Domain limit reached. Your ${user.subscriptionTier} plan allows up to ${limit} domain${
-              limit === 1 ? "" : "s"
-            }. Please upgrade to add more.`,
-          },
-          { status: 403 }
-        );
-      }
-    }
-
     // ── Bridge permission check ─────────────────────────────────────────────
     const canUseBridge =
       user.subscriptionTier === "pro" || user.subscriptionTier === "lifetime";
@@ -87,107 +65,123 @@ export async function POST(request: NextRequest) {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // PHASE 1 — prepare: create ACME order, return challenge token to client
+    // PREPARE — create ACME order and persist challenge data to DB
     // ════════════════════════════════════════════════════════════════════════
     if (action === "prepare") {
-      const challengeInfo = await createAcmeChallenge(domainName, email);
+      // Enforce domain limit before creating a pending entry
+      if (!user.isAdmin) {
+        const limit = getDomainLimit(user.subscriptionTier, user.isAdmin);
+        const [{ value: domainCount }] = await db
+          .select({ value: count() })
+          .from(domains)
+          .where(eq(domains.userId, user.id));
 
-      // Persist the challenge state in DB so Phase 2 can resume it.
-      // You need an `acme_challenges` table (see schema note below).
-      await db
-        .insert(acmeChallenges)
-        .values({
+        if (domainCount >= limit) {
+          return NextResponse.json(
+            {
+              error: `Domain limit reached. Your ${user.subscriptionTier} plan allows up to ${limit} domain${
+                limit === 1 ? "" : "s"
+              }. Please upgrade to add more.`,
+            },
+            { status: 403 }
+          );
+        }
+      }
+
+      const prepared = await prepareSSLChallenges(domainName, email, includeWww);
+
+      // Upsert one row per domain into acme_challenges
+      // (unique constraint: userId + domain — delete old row first if exists)
+      const domainList = buildDomainList(domainName, includeWww);
+
+      // Clear any stale challenges for these domains
+      if (domainList.length > 0) {
+        await db
+          .delete(acmeChallenges)
+          .where(
+            and(
+              eq(acmeChallenges.userId, user.id),
+              inArray(acmeChallenges.domain, domainList)
+            )
+          );
+      }
+
+      // Insert fresh challenge rows
+      await db.insert(acmeChallenges).values(
+        prepared.map((c) => ({
           userId: user.id,
-          domain: domainName,
-          token: challengeInfo.token,
-          keyAuthorization: challengeInfo.keyAuthorization,
-          orderUrl: challengeInfo.orderUrl,
-          accountKeyPem: challengeInfo.accountKeyPem,
-          csrKeyPem: challengeInfo.csrKeyPem,
-          // Store csrDer as base64 string
-          csrDer: challengeInfo.csrDer.toString("base64"),
-          createdAt: new Date(),
-        })
-        // If user retries the prepare step, overwrite the previous record
-        .onConflictDoUpdate({
-          target: [acmeChallenges.userId, acmeChallenges.domain],
-          set: {
-            token: challengeInfo.token,
-            keyAuthorization: challengeInfo.keyAuthorization,
-            orderUrl: challengeInfo.orderUrl,
-            accountKeyPem: challengeInfo.accountKeyPem,
-            csrKeyPem: challengeInfo.csrKeyPem,
-            csrDer: challengeInfo.csrDer.toString("base64"),
-            createdAt: new Date(),
-          },
-        });
+          domain: c.domain,
+          token: c.token,
+          keyAuthorization: c.keyAuthorization,
+          orderUrl: c.orderUrl,
+          accountKeyPem: c.accountKeyPem,
+          csrKeyPem: c.csrKeyPem,
+          csrDer: c.csrDer,
+        }))
+      );
 
       return NextResponse.json({
         success: true,
-        action: "prepare",
+        // Primary challenge (for single-domain backward compat in page.tsx)
         challenge: {
-          token: challengeInfo.token,
-          keyAuthorization: challengeInfo.keyAuthorization,
-          // Tell the frontend exactly what URL Let's Encrypt will check
-          verifyUrl: `http://${domainName}/.well-known/acme-challenge/${challengeInfo.token}`,
+          token: prepared[0].token,
+          keyAuthorization: prepared[0].keyAuthorization,
+          filePath: prepared[0].filePath,
+          fileContent: prepared[0].fileContent,
         },
-        message:
-          "Challenge created. Serve the keyAuthorization at the verifyUrl, then call this endpoint with action=finalize.",
+        // All challenges — for www + non-www
+        challenges: prepared.map((c) => ({
+          domain: c.domain,
+          token: c.token,
+          keyAuthorization: c.keyAuthorization,
+          filePath: c.filePath,
+          fileContent: c.fileContent,
+        })),
       });
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // PHASE 2 — finalize: validate challenge + issue certificate
+    // FINALIZE — load challenges from DB, validate, issue cert, save records
     // ════════════════════════════════════════════════════════════════════════
 
-    // Load the persisted challenge state
-    const [saved] = await db
+    const domainList = buildDomainList(domainName, includeWww);
+
+    // Load all challenge rows for this user + domain(s) from DB
+    const storedRows = await db
       .select()
       .from(acmeChallenges)
       .where(
         and(
           eq(acmeChallenges.userId, user.id),
-          eq(acmeChallenges.domain, domainName)
+          inArray(acmeChallenges.domain, domainList)
         )
-      )
-      .limit(1);
+      );
 
-    if (!saved) {
+    if (storedRows.length === 0) {
       return NextResponse.json(
         {
           error:
-            'No pending challenge found for this domain. Please call action="prepare" first.',
+            "No pending challenge found. Please restart the verification process.",
         },
         { status: 400 }
       );
     }
 
-    // Reconstruct ChallengeInfo from DB
-    const challengeInfo = {
-      token: saved.token,
-      keyAuthorization: saved.keyAuthorization,
-      orderUrl: saved.orderUrl,
-      accountKeyPem: saved.accountKeyPem,
-      csrKeyPem: saved.csrKeyPem,
-      csrDer: Buffer.from(saved.csrDer, "base64"),
-    };
+    // Issue the certificate
+    const sslResult = await finalizeSSLCertificate(storedRows, useBridge);
 
-    // ── Actually issue the certificate ──────────────────────────────────────
-    const sslResult = await finaliseAcmeOrder(domainName, challengeInfo);
-
-    // Clean up the challenge row – no longer needed
+    // Clean up challenge rows
     await db
       .delete(acmeChallenges)
       .where(
         and(
           eq(acmeChallenges.userId, user.id),
-          eq(acmeChallenges.domain, domainName)
+          inArray(acmeChallenges.domain, domainList)
         )
       );
 
     // ── Persist domain + certificate ────────────────────────────────────────
     const bridgeSecret = useBridge ? generateBridgeSecret() : null;
-
     const nextRenewalDate = new Date();
     nextRenewalDate.setDate(nextRenewalDate.getDate() + 75);
 
@@ -208,7 +202,7 @@ export async function POST(request: NextRequest) {
       domainId: newDomain.id,
       crtBody: sslResult.certificate,
       keyBodyEncrypted: encryptedPrivateKey,
-      caBundle: sslResult.caCertificate,
+      caBundle: sslResult.caCertificate || null,
       expiryDate: sslResult.expiryDate,
     });
 
@@ -216,31 +210,43 @@ export async function POST(request: NextRequest) {
     const zip = new JSZip();
     zip.file(`${domainName}.crt`, sslResult.certificate);
     zip.file(`${domainName}.key`, sslResult.privateKey);
+
     if (sslResult.caCertificate) {
       zip.file(`${domainName}-ca-bundle.crt`, sslResult.caCertificate);
     }
+
+    const coveredDomains = includeWww
+      ? domainList.join(", ")
+      : domainName;
+
     zip.file(
       "README.txt",
       `SSL Certificate for ${domainName}
-
-Certificate: ${domainName}.crt
-Private Key: ${domainName}.key
-CA Bundle:   ${domainName}-ca-bundle.crt
+${"─".repeat(40)}
+Domains covered : ${coveredDomains}
+Certificate     : ${domainName}.crt
+Private Key     : ${domainName}.key
+CA Bundle       : ${
+        sslResult.caCertificate
+          ? `${domainName}-ca-bundle.crt`
+          : "(not included — not provided by CA for this issuance)"
+      }
 
 Certificate expires: ${sslResult.expiryDate.toLocaleDateString()}
+
+Installation instructions vary by server type.
+Please consult your hosting provider's documentation.
 `
     );
 
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
-    const base64Zip = zipBuffer.toString("base64");
 
     return NextResponse.json({
       success: true,
-      action: "finalize",
       domainId: newDomain.id,
       expiryDate: sslResult.expiryDate,
       autoRenewEnabled: useBridge,
-      certificateZip: base64Zip,
+      certificateZip: zipBuffer.toString("base64"),
     });
   } catch (error: any) {
     console.error("SSL generation error:", error);
