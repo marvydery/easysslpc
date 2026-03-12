@@ -44,28 +44,40 @@ export default function GeneratePage() {
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  // Pre-fill from existing domain record if domainId is in query
+  // When arriving via "Complete Verification" link, auto-restart challenge
   useEffect(() => {
     if (!domainIdParam) return;
+
     fetch(`/api/domains/${domainIdParam}`)
       .then((res) => res.json())
-      .then((data) => {
-        if (data.domain) {
-          setDomain(data.domain.domainName);
-          setEmail(data.userEmail || "");
-          if (data.domain.challengeToken && data.domain.challengeValue) {
-            setDomainId(data.domain.id);
-            setChallenges([
-              {
-                domain: data.domain.domainName,
-                token: data.domain.challengeToken,
-                keyAuthorization: data.domain.challengeValue,
-                filePath: `/.well-known/acme-challenge/${data.domain.challengeToken}`,
-                fileContent: data.domain.challengeValue,
-              },
-            ]);
-            setStep("challenge");
-          }
+      .then(async (data) => {
+        if (!data.domain) return;
+
+        const domainName = data.domain.domainName;
+        const userEmail = data.userEmail || "";
+
+        setDomain(domainName);
+        setEmail(userEmail);
+        setLoading(true);
+        setError(null);
+
+        try {
+          const res = await fetch("/api/ssl/challenge/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ domain: domainName, email: userEmail, includeWww: false }),
+          });
+
+          const result = await res.json();
+          if (!res.ok) throw new Error(result.error || "Failed to create challenge");
+
+          setDomainId(result.domainId);
+          setChallenges(result.challenges);
+          setStep("challenge");
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
         }
       })
       .catch(console.error);
@@ -237,6 +249,13 @@ export default function GeneratePage() {
         {/* ── FORM ── */}
         {step === "form" && (
           <div className="bg-white rounded-xl shadow p-6">
+            {domainIdParam && loading ? (
+              <div className="py-12 text-center">
+                <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto mb-3" />
+                <p className="text-gray-600">Preparing verification challenge...</p>
+              </div>
+            ) : (
+            <>
             <h2 className="text-xl font-bold mb-2">Enter Domain Details</h2>
             <p className="text-gray-600 mb-6">
               We&apos;ll create a verification challenge for your domain.
@@ -325,6 +344,8 @@ export default function GeneratePage() {
                 )}
               </button>
             </form>
+            </>
+            )}
           </div>
         )}
 
