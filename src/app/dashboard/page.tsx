@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { users, domains, certificates } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import Link from "next/link";
-import { Lock, Plus, Crown, ShieldCheck } from "lucide-react";
+import { Lock, Plus, Crown, ShieldCheck, SearchCheck } from "lucide-react";
 import { getDomainLimit, getDomainLimitLabel } from "@/lib/plans";
 import DashboardClient from "@/components/DashboardClient";
 
@@ -143,7 +143,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* Actions */}
-        <div className="mb-6 flex items-center gap-4">
+        <div className="mb-6 flex items-center gap-4 flex-wrap">
           {canAddMore ? (
             <Link
               href="/dashboard/generate"
@@ -170,6 +170,13 @@ export default async function DashboardPage() {
               </p>
             </div>
           )}
+          <Link
+            href="/dashboard/ssl-checker"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium"
+          >
+            <SearchCheck className="w-5 h-5 text-blue-600" />
+            SSL Checker
+          </Link>
         </div>
 
         {/* Domain usage bar (non-admin only) */}
