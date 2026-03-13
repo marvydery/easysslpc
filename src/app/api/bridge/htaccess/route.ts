@@ -25,7 +25,7 @@ RewriteRule ^([a-zA-Z0-9_\\-]+)$ bridge.php?token=$1 [L,QSA]
     status: 200,
     headers: {
       "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename=".htaccess"`,
+      "Content-Disposition": `attachment; filename=".htaccess"; filename*=UTF-8''%2Ehtaccess`,
     },
   });
 }
