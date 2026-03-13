@@ -90,11 +90,11 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchStats();
     fetchSettings();
-  }, []);
+  }, [fetchStats, fetchSettings]);
 
   useEffect(() => {
     if (activeTab === "users" && allUsers.length === 0) fetchUsers();
-  }, [activeTab]);
+  }, [activeTab, allUsers.length, fetchUsers]);
 
   // ── Save settings ───────────────────────────────────────────────────────────
   async function saveSettings(subset: Settings) {
@@ -462,7 +462,7 @@ export default function AdminDashboard() {
                     onChange={(e) => setLocalSettings((p) => ({ ...p, acme_environment: e.target.value }))}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="production">Production (Let's Encrypt)</option>
+                    <option value="production">Production (Let&apos;s Encrypt)</option>
                     <option value="staging">Staging (Testing only)</option>
                   </select>
                   <p className="text-xs text-orange-600 mt-1">⚠️ Staging certificates are not trusted by browsers</p>
@@ -497,7 +497,7 @@ export default function AdminDashboard() {
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                   <p className="text-xs text-yellow-800">
                     <strong>Note:</strong> Keys saved here override environment variables. 
-                    Paystack secret key is sensitive — only change if you're rotating keys.
+                    Paystack secret key is sensitive — only change if you&apos;re rotating keys.
                   </p>
                 </div>
 
