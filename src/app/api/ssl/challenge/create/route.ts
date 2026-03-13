@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { domain: domainName, email, includeWww = false } = body;
+    const { domain: domainName, email, includeWww = false, useBridge = false } = body;
 
     if (!domainName || !email) {
       return NextResponse.json(
@@ -96,14 +96,14 @@ export async function POST(request: NextRequest) {
     if (existingDomains.length > 0) {
       const [updated] = await db
         .update(domains)
-        .set({ validationMethod: "http-01", updatedAt: new Date() })
+        .set({ validationMethod: "http-01", autoRenewEnabled: useBridge, updatedAt: new Date() })
         .where(eq(domains.id, existingDomains[0].id))
         .returning();
       domainRecord = updated;
     } else {
       const [created] = await db
         .insert(domains)
-        .values({ userId: user.id, domainName: apexDomain, validationMethod: "http-01" })
+        .values({ userId: user.id, domainName: apexDomain, validationMethod: "http-01", autoRenewEnabled: useBridge })
         .returning();
       domainRecord = created;
     }
