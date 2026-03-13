@@ -1,597 +1,278 @@
-"use client";
-
-import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { auth, currentUser } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+import { db } from "@/lib/db";
+import { users, domains, certificates } from "@/lib/db/schema";
+import { eq, desc } from "drizzle-orm";
 import Link from "next/link";
-import {
-  Lock,
-  ArrowLeft,
-  CheckCircle,
-  Copy,
-  ExternalLink,
-  Loader2,
-  Download,
-  Globe,
-} from "lucide-react";
+import { Lock, Plus, Crown, ShieldCheck, SearchCheck } from "lucide-react";
+import { getDomainLimit, getDomainLimitLabel } from "@/lib/plans";
+import DashboardClient from "@/components/DashboardClient";
 
-interface ChallengeInfo {
-  domain: string;
-  token: string;
-  keyAuthorization: string;
-  filePath: string;
-  fileContent: string;
-}
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "";
 
-export default function GeneratePage() {
-  const searchParams = useSearchParams();
-  const domainIdParam = searchParams.get("domainId");
+export default async function DashboardPage() {
+  const { userId } = auth();
+  const user = await currentUser();
 
-  const [step, setStep] = useState<"form" | "challenge" | "generating" | "done">("form");
-  const [domain, setDomain] = useState("");
-  const [email, setEmail] = useState("");
-  const [useBridge, setUseBridge] = useState(false);
-  const [includeWww, setIncludeWww] = useState(false);
-  const [challenges, setChallenges] = useState<ChallengeInfo[]>([]);
-  const [result, setResult] = useState<{
-    domainId: string;
-    expiryDate: string;
-    certificateZip: string;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [verified, setVerified] = useState(false);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
-  const [autoLoading, setAutoLoading] = useState(!!domainIdParam);
-  const [copied, setCopied] = useState<string | null>(null);
+  if (!userId || !user) {
+    redirect("/sign-in");
+  }
 
-  // When arriving via "Complete Verification" link, auto-restart challenge
-  useEffect(() => {
-    if (!domainIdParam) return;
+  const userEmail = user.emailAddresses[0]?.emailAddress || "";
+  const isAdminEmail = !!ADMIN_EMAIL && userEmail.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-    fetch(`/api/domains/${domainIdParam}`)
-      .then((res) => res.json())
-      .then(async (data) => {
-        if (!data.domain) return;
+  // Get or create user in database
+  let dbUser = await db
+    .select()
+    .from(users)
+    .where(eq(users.clerkId, userId))
+    .limit(1);
 
-        const domainName = data.domain.domainName;
-        const userEmail = data.userEmail || "";
+  if (dbUser.length === 0) {
+    // Create user — auto-grant admin/lifetime if email matches ADMIN_EMAIL
+    await db.insert(users).values({
+      clerkId: userId,
+      email: userEmail,
+      subscriptionTier: isAdminEmail ? "lifetime" : "free",
+      isAdmin: isAdminEmail,
+    });
 
-        setDomain(domainName);
-        setEmail(userEmail);
-        setAutoLoading(true);
-        setError(null);
+    dbUser = await db
+      .select()
+      .from(users)
+      .where(eq(users.clerkId, userId))
+      .limit(1);
+  } else if (isAdminEmail && (!dbUser[0].isAdmin || dbUser[0].subscriptionTier !== "lifetime")) {
+    // Upgrade existing user to admin/lifetime if they weren't already
+    await db
+      .update(users)
+      .set({ isAdmin: true, subscriptionTier: "lifetime" })
+      .where(eq(users.clerkId, userId));
 
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 55000);
+    dbUser = await db
+      .select()
+      .from(users)
+      .where(eq(users.clerkId, userId))
+      .limit(1);
+  }
 
-          const res = await fetch("/api/ssl/challenge/create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ domain: domainName, email: userEmail, includeWww: false }),
-            signal: controller.signal,
-          });
+  const currentDbUser = dbUser[0];
+  const domainLimit = getDomainLimit(currentDbUser.subscriptionTier, currentDbUser.isAdmin);
+  const domainLimitLabel = getDomainLimitLabel(currentDbUser.subscriptionTier, currentDbUser.isAdmin);
 
-          clearTimeout(timeout);
-          const result = await res.json();
-          if (!res.ok) throw new Error(result.error || "Failed to create challenge");
+  // Get user's domains with latest certificates
+  const userDomains = await db
+    .select({
+      domain: domains,
+      certificate: certificates,
+    })
+    .from(domains)
+    .leftJoin(certificates, eq(domains.id, certificates.domainId))
+    .where(eq(domains.userId, currentDbUser.id))
+    .orderBy(desc(certificates.createdAt));
 
-          setDomainId(result.domainId);
-          setChallenges(result.challenges);
-          setStep("challenge");
-        } catch (err: any) {
-          if (err.name === "AbortError") {
-            setError("Request timed out. Let\'s Encrypt took too long to respond. Please try again.");
-          } else {
-            setError(err.message);
-          }
-          setAutoLoading(false);
-        } finally {
-          setAutoLoading(false);
-        }
-      })
-      .catch(console.error);
-  }, [domainIdParam]);
-
-  const [domainId, setDomainId] = useState<string | null>(null);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-
-  async function handleVerifyDomain(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 55000);
-
-      const res = await fetch("/api/ssl/challenge/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain, email, includeWww }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to create challenge");
-
-      setDomainId(data.domainId);
-      setChallenges(data.challenges);
-      setStep("challenge");
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+  // Group by domain (get latest certificate for each)
+  const domainMap = new Map();
+  for (const row of userDomains) {
+    if (!domainMap.has(row.domain.id)) {
+      domainMap.set(row.domain.id, row);
     }
   }
-
-  async function handleVerifyFiles() {
-    setVerifying(true);
-    setVerifyError(null);
-    setVerified(false);
-
-    try {
-      const res = await fetch("/api/ssl/challenge/check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domainId }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        const details = data.details
-          ? data.details.map((d: any) => `${d.domain}: ${d.error}`).join("\n")
-          : data.error;
-        setVerifyError(details);
-      } else {
-        setVerified(true);
-      }
-    } catch (err: any) {
-      setVerifyError("Network error — please try again");
-    } finally {
-      setVerifying(false);
-    }
-  }
-
-  async function handleGenerateSSL() {
-    setLoading(true);
-    setError(null);
-    setStep("generating");
-
-    try {
-      const res = await fetch("/api/ssl/challenge/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domainId, email }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to generate SSL certificate");
-
-      setResult({ domainId: data.domainId, expiryDate: data.expiryDate, certificateZip: data.certificateZip });
-      setStep("done");
-    } catch (err: any) {
-      setError(err.message);
-      setStep("challenge");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function copyToClipboard(text: string, key: string) {
-    navigator.clipboard.writeText(text);
-    setCopied(key);
-    setTimeout(() => setCopied(null), 2000);
-  }
-
-  /** Download the raw verification file — filename = token (what LE expects) */
-  function downloadChallengeFile(ch: ChallengeInfo) {
-    const blob = new Blob([ch.fileContent], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = ch.token;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function downloadZip() {
-    if (!result?.certificateZip) return;
-    const binary = atob(result.certificateZip);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "application/zip" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${domain}-ssl-certificates.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  // ── Step indicator ─────────────────────────────────────────────────────────
-
-  const STEPS = ["form", "challenge", "generating", "done"] as const;
-  const stepIndex = STEPS.indexOf(step);
-
-  // ── Derived label for www checkbox ─────────────────────────────────────────
-
-  const wwwLabel = (() => {
-    if (!domain) return "Also cover www and non-www versions";
-    const apex = domain.startsWith("www.") ? domain.slice(4) : domain;
-    const www = `www.${apex}`;
-    return `Also cover ${apex} & ${www}`;
-  })();
+  const uniqueDomains = Array.from(domainMap.values());
+  
+  // Only count domains with certificates towards the limit
+  const domainsWithCertificates = uniqueDomains.filter(d => d.certificate !== null);
+  const canAddMore = currentDbUser.isAdmin || domainsWithCertificates.length < domainLimit;
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Header */}
       <header className="bg-white border-b">
-        <div className="container mx-auto px-4 py-4 flex items-center gap-4">
-          <Link href="/dashboard" className="text-gray-600 hover:text-gray-900">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
+        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <Lock className="w-6 h-6 text-blue-600" />
-            <h1 className="text-xl font-bold">Generate SSL Certificate</h1>
+            <h1 className="text-xl font-bold">EasySSL Dashboard</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            {currentDbUser.isAdmin && (
+              <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 bg-amber-100 text-amber-700 rounded-full">
+                <Crown className="w-3 h-3" />
+                Admin
+              </span>
+            )}
+            <span className="text-sm text-gray-600">
+              Plan:{" "}
+              <span className="font-medium capitalize">
+                {currentDbUser.subscriptionTier}
+              </span>
+            </span>
+            <Link
+              href="/sign-out"
+              className="text-sm text-gray-600 hover:text-gray-900"
+            >
+              Sign Out
+            </Link>
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 max-w-2xl">
-
-        {/* Step indicator */}
-        <div className="flex items-center gap-2 mb-8">
-          {STEPS.map((s, i) => (
-            <div key={s} className="flex items-center gap-2">
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
-                  step === s
-                    ? "bg-blue-600 text-white"
-                    : stepIndex > i
-                    ? "bg-green-500 text-white"
-                    : "bg-gray-200 text-gray-500"
-                }`}
-              >
-                {stepIndex > i ? <CheckCircle className="w-4 h-4" /> : i + 1}
-              </div>
-              {i < STEPS.length - 1 && <div className="h-px bg-gray-200 w-8" />}
-            </div>
-          ))}
+      {/* Main Content */}
+      <main className="container mx-auto px-4 py-8">
+        {/* Stats */}
+        <div className="grid md:grid-cols-4 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-sm text-gray-600 mb-2">Active Certificates</h3>
+            <p className="text-3xl font-bold">{domainsWithCertificates.length}</p>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-sm text-gray-600 mb-2">Domain Limit</h3>
+            <p className="text-3xl font-bold">{domainLimitLabel}</p>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-sm text-gray-600 mb-2">Auto-Renewal</h3>
+            <p className="text-3xl font-bold">
+              {uniqueDomains.filter((d) => d.domain.autoRenewEnabled).length}
+            </p>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-sm text-gray-600 mb-2">Subscription</h3>
+            <p className="text-3xl font-bold capitalize">
+              {currentDbUser.subscriptionTier}
+            </p>
+          </div>
         </div>
 
-        {/* ── FORM ── */}
-        {step === "form" && (
-          <div className="bg-white rounded-xl shadow p-6">
-            {autoLoading ? (
-              <div className="py-12 text-center">
-                <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto mb-3" />
-                <p className="text-gray-600">Preparing verification challenge...</p>
-              </div>
-            ) : (
-            <>
-            <h2 className="text-xl font-bold mb-2">Enter Domain Details</h2>
-            <p className="text-gray-600 mb-6">
-              We&apos;ll create a verification challenge for your domain.
-            </p>
-
-            <form onSubmit={handleVerifyDomain} className="space-y-4">
-              {/* Domain */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Domain Name
-                </label>
-                <input
-                  type="text"
-                  value={domain}
-                  onChange={(e) => setDomain(e.target.value.toLowerCase().trim())}
-                  placeholder="example.com"
-                  className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-
-                {/* www / non-www checkbox — sits directly under the domain field */}
-                <label className="flex items-center gap-2 mt-2 cursor-pointer select-none group">
-                  <input
-                    type="checkbox"
-                    checked={includeWww}
-                    onChange={(e) => setIncludeWww(e.target.checked)}
-                    className="w-4 h-4 rounded accent-blue-600"
-                  />
-                  <span className="text-sm text-gray-600 flex items-center gap-1.5 group-hover:text-gray-800">
-                    <Globe className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-                    {wwwLabel}
-                  </span>
-                </label>
-              </div>
-
-              {/* Email */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              {/* Bridge */}
-              <div className="flex items-start gap-3 p-4 bg-blue-50 rounded-lg">
-                <input
-                  type="checkbox"
-                  id="useBridge"
-                  checked={useBridge}
-                  onChange={(e) => setUseBridge(e.target.checked)}
-                  className="mt-0.5"
-                />
-                <label htmlFor="useBridge" className="text-sm text-blue-800">
-                  <span className="font-medium">Enable Bridge Protocol</span>{" "}
-                  <span className="text-blue-600">(Pro / Lifetime)</span>
-                  <br />
-                  Automatically renew certificates without manual intervention.
-                </label>
-              </div>
-
-              {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                  {error}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Creating Challenge...
-                  </>
-                ) : (
-                  "Verify Domain →"
-                )}
-              </button>
-            </form>
-            </>
-            )}
-          </div>
-        )}
-
-        {/* ── CHALLENGE ── */}
-        {step === "challenge" && challenges.length > 0 && (
-          <div className="bg-white rounded-xl shadow p-6 space-y-6">
-            <div>
-              <h2 className="text-xl font-bold mb-2">Verify Domain Ownership</h2>
-              <p className="text-gray-600">
-                Upload{" "}
-                {challenges.length > 1
-                  ? `these ${challenges.length} verification files`
-                  : "this verification file"}{" "}
-                to your web server to prove you own{" "}
-                <strong>
-                  {challenges.map((c) => c.domain).join(" and ")}
-                </strong>
-                .
-              </p>
-            </div>
-
-            {challenges.map((ch, idx) => (
-              <div key={ch.token} className="border rounded-xl p-4 space-y-3 bg-gray-50">
-                {challenges.length > 1 && (
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    Challenge {idx + 1} — {ch.domain}
-                  </p>
-                )}
-
-                {/* File path */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 uppercase mb-1">
-                    File Path
-                  </label>
-                  <div className="flex items-center gap-2 p-3 bg-white border rounded-lg font-mono text-sm">
-                    <span className="flex-1 break-all text-gray-700">{ch.filePath}</span>
-                    <button
-                      onClick={() => copyToClipboard(ch.filePath, `path-${idx}`)}
-                      className="text-blue-600 hover:text-blue-700 flex-shrink-0"
-                    >
-                      {copied === `path-${idx}` ? (
-                        <CheckCircle className="w-4 h-4 text-green-500" />
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* File content */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 uppercase mb-1">
-                    File Content
-                  </label>
-                  <div className="flex items-center gap-2 p-3 bg-white border rounded-lg font-mono text-sm">
-                    <span className="flex-1 break-all text-gray-700">{ch.fileContent}</span>
-                    <button
-                      onClick={() => copyToClipboard(ch.fileContent, `content-${idx}`)}
-                      className="text-blue-600 hover:text-blue-700 flex-shrink-0"
-                    >
-                      {copied === `content-${idx}` ? (
-                        <CheckCircle className="w-4 h-4 text-green-500" />
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Download button */}
-                <button
-                  onClick={() => downloadChallengeFile(ch)}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  Download Verification File
-                </button>
-                <p className="text-xs text-gray-500 text-center -mt-1">
-                  Upload to{" "}
-                  <code className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">
-                    public_html/.well-known/acme-challenge/
-                  </code>
-                </p>
-              </div>
-            ))}
-
-            {/* Instructions */}
-            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg space-y-2">
-              <p className="text-sm font-semibold text-yellow-800">
-                Steps to complete:
-              </p>
-              <ol className="text-sm text-yellow-700 space-y-1.5 list-decimal list-inside">
-                <li>
-                  Download and upload{" "}
-                  {challenges.length > 1 ? "each verification file" : "the verification file"}{" "}
-                  to{" "}
-                  <code className="bg-yellow-100 px-1 rounded">
-                    public_html/.well-known/acme-challenge/
-                  </code>
-                </li>
-                <li>
-                  Click <strong>Verify Files</strong> — we&apos;ll confirm{" "}
-                  {challenges.map((ch, i) => (
-                    <span key={ch.token}>
-                      {i > 0 && i < challenges.length - 1 && ", "}
-                      {i > 0 && i === challenges.length - 1 && " and "}
-                      <a
-                        href={`http://${ch.domain}${ch.filePath}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline inline-flex items-center gap-0.5 font-medium"
-                      >
-                        {ch.domain}
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </span>
-                  ))}{" "}
-                  {challenges.length > 1 ? "are" : "is"} accessible
-                </li>
-                <li>Once verified, click <strong>Generate SSL Certificate</strong></li>
-              </ol>
-            </div>
-
-            {/* Verify Files button */}
-            {!verified && (
-              <button
-                onClick={handleVerifyFiles}
-                disabled={verifying}
-                className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60"
-              >
-                {verifying ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Checking files...
-                  </>
-                ) : (
-                  "Verify Files →"
-                )}
-              </button>
-            )}
-
-            {/* Verify error */}
-            {verifyError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm whitespace-pre-line">
-                <p className="font-medium mb-1">Verification failed:</p>
-                {verifyError}
-              </div>
-            )}
-
-            {/* Verified success message */}
-            {verified && (
-              <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                Files verified! Let&apos;s Encrypt can reach your domain. You can now generate your certificate.
-              </div>
-            )}
-
-            {error && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                {error}
-              </div>
-            )}
-
-            {/* Generate SSL — only enabled after verification */}
-            <button
-              onClick={handleGenerateSSL}
-              disabled={!verified || loading}
-              className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                "Generate SSL Certificate →"
-              )}
-            </button>
-          </div>
-        )}
-
-        {/* ── GENERATING ── */}
-        {step === "generating" && (
-          <div className="bg-white rounded-xl shadow p-12 text-center">
-            <Loader2 className="w-16 h-16 text-blue-600 animate-spin mx-auto mb-4" />
-            <h2 className="text-xl font-bold mb-2">Generating Your Certificate</h2>
-            <p className="text-gray-600">
-              Let&apos;s Encrypt is validating your domain and issuing the certificate.
-              This may take up to 60 seconds...
-            </p>
-          </div>
-        )}
-
-        {/* ── DONE ── */}
-        {step === "done" && result && (
-          <div className="bg-white rounded-xl shadow p-6 text-center space-y-6">
-            <div>
-              <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                SSL Certificate Generated!
-              </h2>
-              <p className="text-gray-600">
-                Your certificate for{" "}
-                <strong>
-                  {includeWww
-                    ? (() => {
-                        const apex = domain.startsWith("www.") ? domain.slice(4) : domain;
-                        return `${apex} & www.${apex}`;
-                      })()
-                    : domain}
-                </strong>{" "}
-                is ready. It expires on{" "}
-                <strong>{new Date(result.expiryDate).toLocaleDateString()}</strong>.
-              </p>
-            </div>
-
-            <button
-              onClick={downloadZip}
-              className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
-            >
-              <Download className="w-4 h-4" />
-              Download Certificates (.zip)
-            </button>
-
+        {/* Actions */}
+        <div className="mb-6 flex items-center gap-4 flex-wrap">
+          {canAddMore ? (
             <Link
-              href="/dashboard"
-              className="block text-blue-600 hover:text-blue-700 font-medium"
+              href="/dashboard/generate"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
-              ← Back to Dashboard
+              <Plus className="w-5 h-5" />
+              Generate New Certificate
             </Link>
+          ) : (
+            <div className="flex items-center gap-3">
+              <button
+                disabled
+                className="inline-flex items-center gap-2 px-6 py-3 bg-gray-300 text-gray-500 rounded-lg font-medium cursor-not-allowed"
+              >
+                <Plus className="w-5 h-5" />
+                Generate New Certificate
+              </button>
+              <p className="text-sm text-red-600 font-medium">
+                Domain limit reached ({domainsWithCertificates.length}/{domainLimit}).{" "}
+                <Link href="/dashboard/upgrade" className="underline">
+                  Upgrade your plan
+                </Link>{" "}
+                to add more.
+              </p>
+            </div>
+          )}
+          <Link
+            href="/dashboard/ssl-checker"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium"
+          >
+            <SearchCheck className="w-5 h-5 text-blue-600" />
+            SSL Checker
+          </Link>
+        </div>
+
+        {/* Domain usage bar (non-admin only) */}
+        {!currentDbUser.isAdmin && (
+          <div className="mb-6 bg-white p-4 rounded-lg shadow flex items-center gap-4">
+            <ShieldCheck className="w-5 h-5 text-blue-500 flex-shrink-0" />
+            <div className="flex-1">
+              <div className="flex justify-between text-sm mb-1">
+                <span className="text-gray-600">Certificates used</span>
+                <span className="font-medium">
+                  {domainsWithCertificates.length} / {domainLimit}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className={`h-2 rounded-full transition-all ${
+                    domainsWithCertificates.length >= domainLimit
+                      ? "bg-red-500"
+                      : domainsWithCertificates.length >= domainLimit * 0.8
+                      ? "bg-yellow-500"
+                      : "bg-blue-500"
+                  }`}
+                  style={{
+                    width: `${Math.min(
+                      (domainsWithCertificates.length / domainLimit) * 100,
+                      100
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Domains Table */}
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="px-6 py-4 border-b">
+            <h2 className="text-lg font-bold">Your SSL Certificates</h2>
+          </div>
+
+          {uniqueDomains.length === 0 ? (
+            <div className="p-12 text-center">
+              <Lock className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                No certificates yet
+              </h3>
+              <p className="text-gray-600 mb-6">
+                Generate your first SSL certificate to get started
+              </p>
+              <Link
+                href="/dashboard/generate"
+                className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                <Plus className="w-5 h-5" />
+                Generate Certificate
+              </Link>
+            </div>
+          ) : (
+            <DashboardClient
+              domains={uniqueDomains}
+              userTier={currentDbUser.subscriptionTier}
+            />
+          )}
+        </div>
+
+        {/* Upgrade CTA — only for non-admin free users */}
+        {currentDbUser.subscriptionTier === "free" && !currentDbUser.isAdmin && (
+          <div className="mt-8 bg-gradient-to-r from-blue-600 to-blue-700 rounded-lg p-8 text-white">
+            <h3 className="text-2xl font-bold mb-2">
+              Upgrade for Automatic Renewals & More Domains
+            </h3>
+            <p className="text-blue-100 mb-2">
+              <strong>Pro</strong> — $29/year · up to 5 domains · auto-renewal
+            </p>
+            <p className="text-blue-100 mb-6">
+              <strong>Lifetime</strong> — $49 once · up to 10 domains · auto-renewal forever
+            </p>
+            <Link
+              href="/dashboard/upgrade"
+              className="inline-block px-6 py-3 bg-white text-blue-600 rounded-lg hover:bg-blue-50 font-medium"
+            >
+              Upgrade Now
+            </Link>
+          </div>
+        )}
+
+        {/* Admin banner */}
+        {currentDbUser.isAdmin && (
+          <div className="mt-8 bg-gradient-to-r from-amber-500 to-amber-600 rounded-lg p-6 text-white flex items-center gap-4">
+            <Crown className="w-8 h-8 flex-shrink-0" />
+            <div>
+              <h3 className="text-lg font-bold">Admin Account</h3>
+              <p className="text-amber-100 text-sm">
+                You have unlimited domain access and lifetime tier privileges.
+              </p>
+            </div>
           </div>
         )}
       </main>
