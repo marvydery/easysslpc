@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 
@@ -26,6 +27,7 @@ export default async function RootLayout({
         <body className={inter.className}>
           {children}
           <Analytics />
+          <SpeedInsights />
           {gaId && (
             <>
               <Script
