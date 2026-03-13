@@ -39,6 +39,7 @@ export default function DashboardTable({
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [downloadingBridge, setDownloadingBridge] = useState<string | null>(null);
+  const [showBridgeInstructions, setShowBridgeInstructions] = useState<string | null>(null); // domainName
 
   const isBridgeTier = userTier === "pro" || userTier === "lifetime";
 
@@ -89,7 +90,7 @@ export default function DashboardTable({
     }
   }
 
-  async function downloadBridgeFile(domainId: string, filename: string, endpoint: string) {
+  async function downloadBridgeFile(domainId: string, domainName: string, filename: string, endpoint: string) {
     setDownloadingBridge(domainId);
     try {
       const res = await fetch(`/api/bridge/${endpoint}?domainId=${domainId}`);
@@ -104,6 +105,8 @@ export default function DashboardTable({
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+      // Show instructions after download
+      setShowBridgeInstructions(domainName);
     } catch (err: any) {
       alert(err.message || "Failed to download bridge file");
     } finally {
@@ -233,7 +236,7 @@ export default function DashboardTable({
                               <Wifi className="w-3 h-3" /> Bridge Files
                             </span>
                             <button
-                              onClick={() => downloadBridgeFile(domain.id, "bridge.php", "download")}
+                              onClick={() => downloadBridgeFile(domain.id, domain.domainName, "bridge.php", "download")}
                               disabled={downloadingBridge === domain.id}
                               className="inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 disabled:opacity-50"
                             >
@@ -241,7 +244,7 @@ export default function DashboardTable({
                               bridge.php
                             </button>
                             <button
-                              onClick={() => downloadBridgeFile(domain.id, ".htaccess", "htaccess")}
+                              onClick={() => downloadBridgeFile(domain.id, domain.domainName, ".htaccess", "htaccess")}
                               disabled={downloadingBridge === domain.id}
                               className="inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 disabled:opacity-50"
                             >
@@ -278,6 +281,69 @@ export default function DashboardTable({
           </tbody>
         </table>
       </div>
+
+      {/* Bridge Installation Instructions Modal */}
+      {showBridgeInstructions && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">Bridge Installation Instructions</h3>
+              <button onClick={() => setShowBridgeInstructions(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <div className="p-6 space-y-5">
+              <p className="text-sm text-gray-600">
+                Upload both files to your hosting server for <strong>{showBridgeInstructions}</strong> to enable automatic SSL renewal.
+              </p>
+
+              <div className="space-y-3">
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm font-semibold text-blue-800 mb-1">📄 bridge.php</p>
+                  <p className="text-xs text-blue-700 mb-2">Upload to:</p>
+                  <code className="block bg-white border border-blue-200 text-blue-900 text-xs px-3 py-2 rounded">
+                    public_html/.well-known/acme-challenge/bridge.php
+                  </code>
+                </div>
+
+                <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                  <p className="text-sm font-semibold text-purple-800 mb-1">⚙️ .htaccess</p>
+                  <p className="text-xs text-purple-700 mb-2">Upload to:</p>
+                  <code className="block bg-white border border-purple-200 text-purple-900 text-xs px-3 py-2 rounded">
+                    public_html/.well-known/acme-challenge/.htaccess
+                  </code>
+                  <p className="text-xs text-purple-600 mt-2">⚠️ Note: The filename starts with a dot. Make sure your FTP client shows hidden files.</p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm font-semibold text-green-800 mb-1">✅ How to enable hidden files in cPanel File Manager</p>
+                <ol className="text-xs text-green-700 space-y-1 list-decimal list-inside">
+                  <li>Open File Manager in cPanel</li>
+                  <li>Click <strong>Settings</strong> (top right)</li>
+                  <li>Check <strong>Show Hidden Files</strong></li>
+                  <li>Click Save</li>
+                </ol>
+              </div>
+
+              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-sm font-semibold text-yellow-800 mb-1">🔒 Important</p>
+                <p className="text-xs text-yellow-700">
+                  Keep <strong>bridge.php</strong> private — it contains your unique bridge secret. 
+                  Once uploaded, your certificate will renew automatically every 90 days. 
+                  You will receive an email with the new certificate files when renewal completes.
+                </p>
+              </div>
+            </div>
+            <div className="p-6 border-t">
+              <button
+                onClick={() => setShowBridgeInstructions(null)}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                Got it!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Certificate Viewer Modal */}
       {viewingCert && (
