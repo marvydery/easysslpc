@@ -4,7 +4,7 @@
  * POST — update user (tier, suspend, delete, impersonate)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { users, domains, certificates } from "@/lib/db/schema";
 import { eq, count, desc } from "drizzle-orm";
@@ -117,12 +117,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: true, message: "User deleted" });
 
       case "impersonate":
-        // Return a sign-in token for admin to impersonate
-        const token = await clerkClient.users.createUserImpersonationToken({
-          userId: targetUser.clerkId,
-          expiresInSeconds: 3600,
+        // Return user details for admin reference
+        return NextResponse.json({
+          success: true,
+          email: targetUser.email,
+          clerkId: targetUser.clerkId,
+          message: "Use Clerk Dashboard to impersonate this user",
         });
-        return NextResponse.json({ success: true, token: token.token });
 
       default:
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
