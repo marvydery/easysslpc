@@ -623,23 +623,9 @@ export default function AdminDashboard() {
                   <p className="text-xs text-gray-500 mt-1">Found in your Google Analytics → Admin → Data Streams</p>
                 </div>
 
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-xs text-blue-800 space-y-2">
-                  <p className="font-semibold">After saving your GA ID:</p>
-                  <ol className="list-decimal list-inside space-y-1">
-                    <li>Add this to your <code>src/app/layout.tsx</code>:</li>
-                  </ol>
-                  <pre className="bg-white border border-blue-200 rounded p-2 mt-2 overflow-x-auto text-xs">{`import Script from "next/script";
-// In your <head>:
-<Script
-  src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXX"
-  strategy="afterInteractive"
-/>
-<Script id="ga" strategy="afterInteractive">
-  {\`window.dataLayer=window.dataLayer||[];
-  function gtag(){dataLayer.push(arguments)}
-  gtag('js',new Date());
-  gtag('config','G-XXXXXX');\`}
-</Script>`}</pre>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
+                  <p className="font-semibold mb-1">✅ Automatic setup</p>
+                  <p>Once saved, Google Analytics will load automatically on every page. No code changes needed. To disable tracking, simply clear the ID and save.</p>
                 </div>
 
                 <button
