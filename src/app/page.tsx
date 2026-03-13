@@ -314,6 +314,7 @@ export default function HomePage() {
             <Link href="/terms" className="hover:text-gray-900">Terms of Service</Link>
             <Link href="/privacy" className="hover:text-gray-900">Privacy Policy</Link>
             <Link href="/refund" className="hover:text-gray-900">Refund Policy</Link>
+            <a href="mailto:support@easyssl.app" className="hover:text-gray-900">support@easyssl.app</a>
           </div>
           <p className="text-sm">&copy; {new Date().getFullYear()} EasySSL. All rights reserved.</p>
         </div>
