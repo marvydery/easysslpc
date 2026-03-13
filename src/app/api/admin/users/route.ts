@@ -110,11 +110,7 @@ export async function POST(request: NextRequest) {
       case "delete":
         // Delete from DB (cascade handles domains/certs/challenges)
         await db.delete(users).where(eq(users.id, targetUserId));
-        // Also delete from Clerk
-        try {
-          await clerkClient.users.deleteUser(targetUser.clerkId);
-        } catch {}
-        return NextResponse.json({ success: true, message: "User deleted" });
+        return NextResponse.json({ success: true, message: "User deleted from database. Remove from Clerk dashboard manually if needed." });
 
       case "impersonate":
         // Return user details for admin reference
