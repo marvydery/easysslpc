@@ -12,6 +12,7 @@ export const users = pgTable("users", {
   subscriptionTier: subscriptionTierEnum("subscription_tier").notNull().default("free"),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
   isAdmin: boolean("is_admin").default(false).notNull(),
+  isSuspended: boolean("is_suspended").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -65,6 +66,14 @@ export const certificates = pgTable("certificates", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Site Settings Table — single row, key/value store
+export const siteSettings = pgTable("site_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  value: text("value"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   domains: many(domains),
@@ -102,3 +111,4 @@ export type AcmeChallenge = typeof acmeChallenges.$inferSelect;
 export type NewAcmeChallenge = typeof acmeChallenges.$inferInsert;
 export type Certificate = typeof certificates.$inferSelect;
 export type NewCertificate = typeof certificates.$inferInsert;
+export type SiteSetting = typeof siteSettings.$inferSelect;
