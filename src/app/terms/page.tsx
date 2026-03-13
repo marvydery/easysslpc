@@ -20,12 +20,12 @@ export default function TermsPage() {
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">1. Acceptance of Terms</h2>
-            <p>By accessing or using EasySSL ("the Service") at easyssl.app, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service.</p>
+            <p>By accessing or using EasySSL (&quot;the Service&quot;) at easyssl.app, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service.</p>
           </section>
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">2. Description of Service</h2>
-            <p>EasySSL provides a platform for generating and managing SSL/TLS certificates issued by Let's Encrypt, a free and open Certificate Authority. The Service includes certificate generation, storage, auto-renewal features (for paid plans), and related tools.</p>
+            <p>EasySSL provides a platform for generating and managing SSL/TLS certificates issued by Let&apos;s Encrypt, a free and open Certificate Authority. The Service includes certificate generation, storage, auto-renewal features (for paid plans), and related tools.</p>
           </section>
 
           <section>
@@ -38,7 +38,7 @@ export default function TermsPage() {
             <p>You agree to use the Service only for lawful purposes and only for domains you own or have explicit authorization to manage. You may not:</p>
             <ul className="list-disc list-inside mt-2 space-y-1">
               <li>Generate certificates for domains you do not own or control</li>
-              <li>Attempt to circumvent Let's Encrypt rate limits through the Service</li>
+              <li>Attempt to circumvent Let&apos;s Encrypt rate limits through the Service</li>
               <li>Use the Service for any illegal or unauthorized purpose</li>
               <li>Resell or redistribute the Service without written permission</li>
             </ul>
@@ -56,12 +56,12 @@ export default function TermsPage() {
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">7. Intellectual Property</h2>
-            <p>The Service and its original content, features, and functionality are owned by EasySSL and are protected by international copyright, trademark, and other intellectual property laws. SSL certificates issued through the Service are governed by Let's Encrypt's Subscriber Agreement.</p>
+            <p>The Service and its original content, features, and functionality are owned by EasySSL and are protected by international copyright, trademark, and other intellectual property laws. SSL certificates issued through the Service are governed by Let&apos;s Encrypt's Subscriber Agreement.</p>
           </section>
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">8. Disclaimer of Warranties</h2>
-            <p>The Service is provided "as is" without warranties of any kind, either express or implied. We do not warrant that the Service will be uninterrupted, error-free, or that certificates will be issued without delay. SSL certificates are subject to Let's Encrypt's policies and availability.</p>
+            <p>The Service is provided &quot;as is&quot; without warranties of any kind, either express or implied. We do not warrant that the Service will be uninterrupted, error-free, or that certificates will be issued without delay. SSL certificates are subject to Let&apos;s Encrypt's policies and availability.</p>
           </section>
 
           <section>
