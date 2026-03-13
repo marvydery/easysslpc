@@ -310,7 +310,12 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="border-t border-gray-200 py-8 mt-8">
         <div className="container mx-auto px-4 text-center text-gray-600">
-          <p>&copy; {new Date().getFullYear()} EasySSL. All rights reserved.</p>
+          <div className="flex justify-center gap-6 mb-3 text-sm">
+            <Link href="/terms" className="hover:text-gray-900">Terms of Service</Link>
+            <Link href="/privacy" className="hover:text-gray-900">Privacy Policy</Link>
+            <Link href="/refund" className="hover:text-gray-900">Refund Policy</Link>
+          </div>
+          <p className="text-sm">&copy; {new Date().getFullYear()} EasySSL. All rights reserved.</p>
         </div>
       </footer>
     </main>
