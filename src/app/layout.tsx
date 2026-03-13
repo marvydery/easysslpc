@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import Script from "next/script";
+import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 
@@ -24,6 +25,7 @@ export default async function RootLayout({
       <html lang="en">
         <body className={inter.className}>
           {children}
+          <Analytics />
           {gaId && (
             <>
               <Script
