@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Clock, Download, Eye, FileText, Key, Shield, Trash2 } from "lucide-react";
+import { Clock, Download, FileText, Key, Shield, Trash2, Wifi } from "lucide-react";
 import { differenceInDays, format } from "date-fns";
 
 type Domain = {
@@ -10,6 +10,7 @@ type Domain = {
   domainName: string;
   autoRenewEnabled: boolean;
   challengeToken: string | null;
+  bridgeSecret: string | null;
 };
 
 type Certificate = {
@@ -37,22 +38,17 @@ export default function DashboardTable({
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [downloadingBridge, setDownloadingBridge] = useState<string | null>(null);
+
+  const isBridgeTier = userTier === "pro" || userTier === "lifetime";
 
   async function viewCertificate(domainId: string, type: "key" | "crt" | "cabundle") {
     setLoading(true);
     try {
       const res = await fetch(`/api/ssl/certificate/${domainId}?type=${type}`);
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error);
-      }
-
-      setViewingCert({
-        type: type.toUpperCase(),
-        content: data.content,
-        filename: data.filename,
-      });
+      if (!res.ok) throw new Error(data.error);
+      setViewingCert({ type: type.toUpperCase(), content: data.content, filename: data.filename });
     } catch (err: any) {
       alert(err.message || "Failed to load certificate");
     } finally {
@@ -62,7 +58,7 @@ export default function DashboardTable({
 
   function downloadCert() {
     if (!viewingCert) return;
-    const blob = new Blob([viewingCert.content], { type: "text/plain" });
+    const blob = new Blob([viewingCert.content], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -78,30 +74,40 @@ export default function DashboardTable({
   }
 
   async function deletePendingDomain(domainId: string, domainName: string) {
-    if (!confirm(`Delete pending domain "${domainName}"? This action cannot be undone.`)) {
-      return;
-    }
-
+    if (!confirm(`Delete pending domain "${domainName}"? This action cannot be undone.`)) return;
     setDeleting(domainId);
     try {
-      const res = await fetch(`/api/domains/${domainId}/delete`, {
-        method: "DELETE",
-      });
-
+      const res = await fetch(`/api/domains/${domainId}/delete`, { method: "DELETE" });
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error);
-      }
-
+      if (!res.ok) throw new Error(data.error);
       alert("Pending domain deleted successfully");
-      if (onDomainDeleted) {
-        onDomainDeleted();
-      }
+      if (onDomainDeleted) onDomainDeleted();
     } catch (err: any) {
       alert(err.message || "Failed to delete domain");
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function downloadBridgeFile(domainId: string, filename: string, endpoint: string) {
+    setDownloadingBridge(domainId);
+    try {
+      const res = await fetch(`/api/bridge/${endpoint}?domainId=${domainId}`);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to download");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || "Failed to download bridge file");
+    } finally {
+      setDownloadingBridge(null);
     }
   }
 
@@ -111,21 +117,11 @@ export default function DashboardTable({
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Domain
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Status
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Expires
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Auto-Renew
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Actions
-              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Domain</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Auto-Renew</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -135,9 +131,11 @@ export default function DashboardTable({
                 : 0;
               const isExpiring = daysRemaining < 30;
               const hasIncompleteChallenge = !certificate && domain.challengeToken;
+              const showBridge = isBridgeTier && domain.autoRenewEnabled && certificate;
 
               return (
                 <tr key={domain.id}>
+                  {/* Domain */}
                   <td className="px-6 py-4">
                     {hasIncompleteChallenge ? (
                       <Link
@@ -150,22 +148,20 @@ export default function DashboardTable({
                         </span>
                       </Link>
                     ) : (
-                      <div className="font-medium text-gray-900">
-                        {domain.domainName}
-                      </div>
+                      <div className="font-medium text-gray-900">{domain.domainName}</div>
                     )}
                   </td>
+
+                  {/* Status */}
                   <td className="px-6 py-4">
                     {certificate ? (
-                      <span
-                        className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                          daysRemaining < 0
-                            ? "bg-red-100 text-red-800"
-                            : isExpiring
-                            ? "bg-yellow-100 text-yellow-800"
-                            : "bg-green-100 text-green-800"
-                        }`}
-                      >
+                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                        daysRemaining < 0
+                          ? "bg-red-100 text-red-800"
+                          : isExpiring
+                          ? "bg-yellow-100 text-yellow-800"
+                          : "bg-green-100 text-green-800"
+                      }`}>
                         {daysRemaining < 0 ? "Expired" : "Active"}
                       </span>
                     ) : (
@@ -174,20 +170,22 @@ export default function DashboardTable({
                       </span>
                     )}
                   </td>
+
+                  {/* Expires */}
                   <td className="px-6 py-4">
                     {certificate ? (
                       <div>
                         <div className="text-sm text-gray-900">
                           {format(new Date(certificate.expiryDate), "MMM d, yyyy")}
                         </div>
-                        <div className="text-xs text-gray-500">
-                          {daysRemaining} days remaining
-                        </div>
+                        <div className="text-xs text-gray-500">{daysRemaining} days remaining</div>
                       </div>
                     ) : (
                       <span className="text-gray-500">-</span>
                     )}
                   </td>
+
+                  {/* Auto-Renew */}
                   <td className="px-6 py-4">
                     {userTier !== "free" || domain.autoRenewEnabled ? (
                       <span className="inline-flex items-center gap-1 text-sm text-green-600">
@@ -198,17 +196,11 @@ export default function DashboardTable({
                       <span className="text-sm text-gray-500">Manual</span>
                     )}
                   </td>
+
+                  {/* Actions */}
                   <td className="px-6 py-4">
                     {certificate ? (
                       <div className="flex flex-col gap-1">
-                        <button
-                          onClick={() => viewCertificate(domain.id, "key")}
-                          disabled={loading}
-                          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
-                        >
-                          <Key className="w-3 h-3" />
-                          KEY
-                        </button>
                         <button
                           onClick={() => viewCertificate(domain.id, "crt")}
                           disabled={loading}
@@ -218,6 +210,14 @@ export default function DashboardTable({
                           CRT
                         </button>
                         <button
+                          onClick={() => viewCertificate(domain.id, "key")}
+                          disabled={loading}
+                          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                        >
+                          <Key className="w-3 h-3" />
+                          KEY
+                        </button>
+                        <button
                           onClick={() => viewCertificate(domain.id, "cabundle")}
                           disabled={loading}
                           className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
@@ -225,6 +225,31 @@ export default function DashboardTable({
                           <Shield className="w-3 h-3" />
                           CABUNDLE
                         </button>
+
+                        {/* Bridge Files — only for Pro/Lifetime with autoRenew enabled */}
+                        {showBridge && (
+                          <div className="mt-2 pt-2 border-t border-gray-100 flex flex-col gap-1">
+                            <span className="text-xs text-gray-400 font-medium flex items-center gap-1">
+                              <Wifi className="w-3 h-3" /> Bridge Files
+                            </span>
+                            <button
+                              onClick={() => downloadBridgeFile(domain.id, "bridge.php", "download")}
+                              disabled={downloadingBridge === domain.id}
+                              className="inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 disabled:opacity-50"
+                            >
+                              <Download className="w-3 h-3" />
+                              bridge.php
+                            </button>
+                            <button
+                              onClick={() => downloadBridgeFile(domain.id, ".htaccess", "htaccess")}
+                              disabled={downloadingBridge === domain.id}
+                              className="inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 disabled:opacity-50"
+                            >
+                              <Download className="w-3 h-3" />
+                              .htaccess
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ) : hasIncompleteChallenge ? (
                       <div className="flex flex-col gap-1">
@@ -259,23 +284,14 @@ export default function DashboardTable({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
             <div className="p-6 border-b flex items-center justify-between">
-              <h3 className="text-lg font-bold text-gray-900">
-                {viewingCert.type} File
-              </h3>
-              <button
-                onClick={() => setViewingCert(null)}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </button>
+              <h3 className="text-lg font-bold text-gray-900">{viewingCert.type} File</h3>
+              <button onClick={() => setViewingCert(null)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
-
             <div className="p-6 overflow-auto flex-1">
               <pre className="bg-gray-50 p-4 rounded border text-xs overflow-x-auto">
                 {viewingCert.content}
               </pre>
             </div>
-
             <div className="p-6 border-t flex gap-3">
               <button
                 onClick={copyToClipboard}
