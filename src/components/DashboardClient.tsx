@@ -1,5 +1,4 @@
 "use client";
-
 import { useRouter } from "next/navigation";
 import DashboardTable from "./DashboardTable";
 
@@ -8,6 +7,7 @@ type Domain = {
   domainName: string;
   autoRenewEnabled: boolean;
   challengeToken: string | null;
+  bridgeSecret: string | null;
 };
 
 type Certificate = {
@@ -27,11 +27,9 @@ export default function DashboardClient({
   userTier: string;
 }) {
   const router = useRouter();
-
   const handleDomainDeleted = () => {
     router.refresh();
   };
-
   return (
     <DashboardTable
       domains={domains}
