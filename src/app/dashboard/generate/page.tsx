@@ -77,7 +77,7 @@ export default function GeneratePage() {
       const res = await fetch("/api/ssl/challenge/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain, email, includeWww }),
+        body: JSON.stringify({ domain, email, includeWww, useBridge }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
