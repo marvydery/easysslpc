@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import Script from "next/script";
 import "./globals.css";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -11,22 +12,22 @@ export const metadata: Metadata = {
   description: "Generate and auto-renew free SSL certificates from Let's Encrypt",
 };
 
-const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
-
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const gaId = await getSetting(SETTING_KEYS.GA_MEASUREMENT_ID);
+
   return (
     <ClerkProvider>
       <html lang="en">
         <body className={inter.className}>
           {children}
-          {GA_ID && (
+          {gaId && (
             <>
               <Script
-                src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}
+                src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`}
                 strategy="afterInteractive"
               />
               <Script id="google-analytics" strategy="afterInteractive">
@@ -34,7 +35,7 @@ export default function RootLayout({
                   window.dataLayer = window.dataLayer || [];
                   function gtag(){dataLayer.push(arguments)}
                   gtag('js', new Date());
-                  gtag('config', '${GA_ID}');
+                  gtag('config', '${gaId}');
                 `}
               </Script>
             </>
