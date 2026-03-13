@@ -156,7 +156,7 @@ export default function GeneratePage() {
 
   /** Download the raw verification file — filename = token (what LE expects) */
   function downloadChallengeFile(ch: ChallengeInfo) {
-    const blob = new Blob([ch.fileContent], { type: "text/plain" });
+    const blob = new Blob([ch.fileContent], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
