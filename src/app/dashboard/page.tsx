@@ -95,10 +95,13 @@ export default async function DashboardPage() {
           </div>
           <div className="flex items-center gap-4">
             {currentDbUser.isAdmin && (
-              <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 bg-amber-100 text-amber-700 rounded-full">
+              <Link
+                href="/dashboard/admin"
+                className="flex items-center gap-1 text-xs font-bold px-3 py-1 bg-amber-100 text-amber-700 rounded-full hover:bg-amber-200 transition-colors"
+              >
                 <Crown className="w-3 h-3" />
-                Admin
-              </span>
+                Admin Panel
+              </Link>
             )}
             <span className="text-sm text-gray-600">
               Plan:{" "}
