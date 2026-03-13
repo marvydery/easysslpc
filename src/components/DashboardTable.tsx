@@ -39,9 +39,31 @@ export default function DashboardTable({
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [downloadingBridge, setDownloadingBridge] = useState<string | null>(null);
-  const [showBridgeInstructions, setShowBridgeInstructions] = useState<string | null>(null); // domainName
+  const [showBridgeInstructions, setShowBridgeInstructions] = useState<string | null>(null);
+  const [checkingBridge, setCheckingBridge] = useState<string | null>(null);
+  const [bridgeCheckResult, setBridgeCheckResult] = useState<{
+    domainName: string;
+    allPassed: boolean;
+    anyFailed: boolean;
+    summary: string;
+    checks: Array<{ label: string; status: "pass" | "fail" | "warn"; message: string }>;
+  } | null>(null);
 
   const isBridgeTier = userTier === "pro" || userTier === "lifetime";
+
+  async function checkBridgeSetup(domainId: string) {
+    setCheckingBridge(domainId);
+    try {
+      const res = await fetch(`/api/bridge/check?domainId=${domainId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Check failed");
+      setBridgeCheckResult(data);
+    } catch (err: any) {
+      alert(err.message || "Failed to check bridge setup");
+    } finally {
+      setCheckingBridge(null);
+    }
+  }
 
   async function viewCertificate(domainId: string, type: "key" | "crt" | "cabundle") {
     setLoading(true);
@@ -252,6 +274,23 @@ export default function DashboardTable({
                               <Download className="w-3 h-3" />
                               .htaccess
                             </button>
+                            <button
+                              onClick={() => checkBridgeSetup(domain.id)}
+                              disabled={checkingBridge === domain.id}
+                              className="inline-flex items-center gap-1 text-xs text-green-600 hover:text-green-700 disabled:opacity-50 mt-1"
+                            >
+                              {checkingBridge === domain.id ? (
+                                <>
+                                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                                  </svg>
+                                  Checking...
+                                </>
+                              ) : (
+                                <>✓ Check Auto Renewal</>
+                              )}
+                            </button>
                           </div>
                         )}
                       </div>
@@ -282,6 +321,66 @@ export default function DashboardTable({
           </tbody>
         </table>
       </div>
+
+      {/* Bridge Check Result Modal */}
+      {bridgeCheckResult && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">
+                Auto Renewal Check — {bridgeCheckResult.domainName}
+              </h3>
+              <button onClick={() => setBridgeCheckResult(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <div className="p-6 space-y-3">
+              {/* Summary banner */}
+              <div className={`p-4 rounded-lg border ${
+                bridgeCheckResult.allPassed
+                  ? "bg-green-50 border-green-200"
+                  : bridgeCheckResult.anyFailed
+                  ? "bg-red-50 border-red-200"
+                  : "bg-yellow-50 border-yellow-200"
+              }`}>
+                <p className={`text-sm font-semibold ${
+                  bridgeCheckResult.allPassed ? "text-green-800"
+                  : bridgeCheckResult.anyFailed ? "text-red-800"
+                  : "text-yellow-800"
+                }`}>
+                  {bridgeCheckResult.allPassed ? "✅" : bridgeCheckResult.anyFailed ? "❌" : "⚠️"}{" "}
+                  {bridgeCheckResult.summary}
+                </p>
+              </div>
+
+              {/* Individual checks */}
+              <div className="space-y-2">
+                {bridgeCheckResult.checks.map((check, i) => (
+                  <div key={i} className={`flex items-start gap-3 p-3 rounded-lg border ${
+                    check.status === "pass" ? "bg-green-50 border-green-100"
+                    : check.status === "fail" ? "bg-red-50 border-red-100"
+                    : "bg-yellow-50 border-yellow-100"
+                  }`}>
+                    <span className="text-base mt-0.5 flex-shrink-0">
+                      {check.status === "pass" ? "✅" : check.status === "fail" ? "❌" : "⚠️"}
+                    </span>
+                    <div>
+                      <p className="text-xs font-semibold text-gray-800">{check.label}</p>
+                      <p className="text-xs text-gray-600 mt-0.5">{check.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="p-6 border-t">
+              <button
+                onClick={() => setBridgeCheckResult(null)}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bridge Installation Instructions Modal */}
       {showBridgeInstructions && (
