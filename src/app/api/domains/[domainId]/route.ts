@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
-import { users, domains } from "@/lib/db/schema";
+import { users, domains, acmeChallenges } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 
-/**
- * GET /api/domains/[id]
- * Returns a single domain record owned by the current user,
- * plus the user's email for pre-filling the generate form.
- */
 export async function GET(
   request: NextRequest,
   { params }: { params: { domainId: string } }
@@ -39,12 +34,26 @@ export async function GET(
       return NextResponse.json({ error: "Domain not found" }, { status: 404 });
     }
 
+    // Check if www was included by looking at stored acme_challenges
+    const apexDomain = domain.domainName.startsWith("www.")
+      ? domain.domainName.slice(4)
+      : domain.domainName;
+    const wwwDomain = `www.${apexDomain}`;
+
+    const storedChallenges = await db
+      .select()
+      .from(acmeChallenges)
+      .where(eq(acmeChallenges.userId, user.id));
+
+    const includeWww = storedChallenges.some((c) => c.domain === wwwDomain);
+
     return NextResponse.json({
       domain,
       userEmail: user.email,
+      includeWww,
     });
   } catch (error: any) {
-    console.error("GET /api/domains/[id] error:", error);
+    console.error("GET /api/domains/[domainId] error:", error);
     return NextResponse.json(
       { error: error.message || "Internal server error" },
       { status: 500 }
