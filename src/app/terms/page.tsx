@@ -56,12 +56,12 @@ export default function TermsPage() {
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">7. Intellectual Property</h2>
-            <p>The Service and its original content, features, and functionality are owned by EasySSL and are protected by international copyright, trademark, and other intellectual property laws. SSL certificates issued through the Service are governed by Let&apos;s Encrypt's Subscriber Agreement.</p>
+            <p>The Service and its original content, features, and functionality are owned by EasySSL and are protected by international copyright, trademark, and other intellectual property laws. SSL certificates issued through the Service are governed by Let&apos;s Encrypt&apos;s Subscriber Agreement.</p>
           </section>
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">8. Disclaimer of Warranties</h2>
-            <p>The Service is provided &quot;as is&quot; without warranties of any kind, either express or implied. We do not warrant that the Service will be uninterrupted, error-free, or that certificates will be issued without delay. SSL certificates are subject to Let&apos;s Encrypt's policies and availability.</p>
+            <p>The Service is provided &quot;as is&quot; without warranties of any kind, either express or implied. We do not warrant that the Service will be uninterrupted, error-free, or that certificates will be issued without delay. SSL certificates are subject to Let&apos;s Encrypt&apos;s policies and availability.</p>
           </section>
 
           <section>
