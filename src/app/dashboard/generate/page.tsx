@@ -45,53 +45,20 @@ export default function GeneratePage() {
   const [autoLoading, setAutoLoading] = useState(!!domainIdParam);
   const [copied, setCopied] = useState<string | null>(null);
 
-  // When arriving via "Complete Verification" link, auto-restart challenge
+  // When arriving via "Complete Verification" link, pre-fill form
   useEffect(() => {
     if (!domainIdParam) return;
 
     fetch(`/api/domains/${domainIdParam}`)
       .then((res) => res.json())
-      .then(async (data) => {
+      .then((data) => {
         if (!data.domain) return;
-
-        const domainName = data.domain.domainName;
-        const userEmail = data.userEmail || "";
-
-        setDomain(domainName);
-        setEmail(userEmail);
-        setAutoLoading(true);
-        setError(null);
-
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 55000);
-
-          const res = await fetch("/api/ssl/challenge/create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ domain: domainName, email: userEmail, includeWww: false }),
-            signal: controller.signal,
-          });
-
-          clearTimeout(timeout);
-          const result = await res.json();
-          if (!res.ok) throw new Error(result.error || "Failed to create challenge");
-
-          setDomainId(result.domainId);
-          setChallenges(result.challenges);
-          setStep("challenge");
-        } catch (err: any) {
-          if (err.name === "AbortError") {
-            setError("Request timed out. Let\'s Encrypt took too long to respond. Please try again.");
-          } else {
-            setError(err.message);
-          }
-          setAutoLoading(false);
-        } finally {
-          setAutoLoading(false);
-        }
+        setDomain(data.domain.domainName);
+        setEmail(data.userEmail || "");
+        setIncludeWww(data.includeWww === true);
+        setAutoLoading(false);
       })
-      .catch(console.error);
+      .catch(() => setAutoLoading(false));
   }, [domainIdParam]);
 
   const [domainId, setDomainId] = useState<string | null>(null);
@@ -268,7 +235,7 @@ export default function GeneratePage() {
             {autoLoading ? (
               <div className="py-12 text-center">
                 <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto mb-3" />
-                <p className="text-gray-600">Preparing verification challenge...</p>
+                <p className="text-gray-600">Loading domain details...</p>
               </div>
             ) : (
             <>
