@@ -55,7 +55,7 @@ export default function PrivacyPage() {
               <li><strong>Clerk</strong> — Authentication and user management</li>
               <li><strong>Supabase</strong> — Database hosting</li>
               <li><strong>Paddle</strong> — Payment processing</li>
-              <li><strong>Let's Encrypt</strong> — SSL certificate issuance</li>
+              <li><strong>Let&apos;s Encrypt</strong> — SSL certificate issuance</li>
               <li><strong>Vercel</strong> — Application hosting</li>
               <li><strong>Google Analytics</strong> — Usage analytics (optional)</li>
             </ul>
