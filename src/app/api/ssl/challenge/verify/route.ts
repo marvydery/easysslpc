@@ -32,10 +32,7 @@ export async function POST(request: NextRequest) {
     const { domainId, email } = body;
 
     if (!domainId || !email) {
-      return NextResponse.json(
-        { error: "Domain ID and email are required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Domain ID and email are required" }, { status: 400 });
     }
 
     const [user] = await db.select().from(users).where(eq(users.clerkId, userId)).limit(1);
@@ -69,11 +66,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { accountKeyPem, csrKeyPem, csrDer } = storedChallenges[0];
+    const { accountKeyPem, csrKeyPem, csrDer, orderUrl } = storedChallenges[0];
     const domainList = storedChallenges.map((c) => c.domain);
     const csrBuffer = Buffer.from(csrDer, "base64");
 
-    // Rebuild client with the SAME account key used to create the order
+    // Step 1: Verify all uploaded files match stored tokens BEFORE touching LE
+    for (const stored of storedChallenges) {
+      const url = `http://${stored.domain}/.well-known/acme-challenge/${stored.token}`;
+      let fetchRes: Response;
+      try {
+        fetchRes = await fetch(url, { headers: { "User-Agent": "EasySSL/1.0" } });
+      } catch {
+        return NextResponse.json(
+          { error: `Could not reach ${url}. Ensure your server is accessible over plain HTTP.` },
+          { status: 400 }
+        );
+      }
+      if (!fetchRes.ok) {
+        return NextResponse.json(
+          { error: `Verification file not found for ${stored.domain} (HTTP ${fetchRes.status}). Upload the file to public_html/.well-known/acme-challenge/${stored.token}` },
+          { status: 400 }
+        );
+      }
+      const content = await fetchRes.text();
+      if (content.trim() !== stored.keyAuthorization.trim()) {
+        return NextResponse.json(
+          { error: `File content mismatch for ${stored.domain}. Re-download and re-upload the verification file.` },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Step 2: Rebuild client with the SAME account key used to create the order
     const client = new acme.Client({
       directoryUrl: ACME_DIRECTORY_URL,
       accountKey: accountKeyPem,
@@ -82,56 +106,17 @@ export async function POST(request: NextRequest) {
       backoffMax: 10000,
     });
 
-    // Re-register (idempotent — returns existing LE account)
+    // Re-register account (idempotent — returns existing LE account)
     await client.createAccount({
       termsOfServiceAgreed: true,
       contact: [`mailto:${email}`],
     });
 
-    // First verify all files are uploaded correctly before creating the order
-    for (const stored of storedChallenges) {
-      const url = `http://${stored.domain}/.well-known/acme-challenge/${stored.token}`;
-      let fetchRes: Response;
-      try {
-        fetchRes = await fetch(url, { headers: { "User-Agent": "EasySSL/1.0" } });
-      } catch {
-        return NextResponse.json(
-          { error: `Could not reach ${url}. Ensure your server is accessible over HTTP.` },
-          { status: 400 }
-        );
-      }
-
-      if (!fetchRes.ok) {
-        return NextResponse.json(
-          {
-            error: `Verification file not found for ${stored.domain} (HTTP ${fetchRes.status}).`,
-            hint: `Upload a file named "${stored.token}" to public_html/.well-known/acme-challenge/`,
-          },
-          { status: 400 }
-        );
-      }
-
-      const content = await fetchRes.text();
-      if (content.trim() !== stored.keyAuthorization.trim()) {
-        return NextResponse.json(
-          {
-            error: `File content mismatch for ${stored.domain}.`,
-            hint: `The file should contain exactly: ${stored.keyAuthorization}`,
-          },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Files confirmed — now create a fresh order and complete challenges.
-    // Since the same account key is used and files are already in place,
-    // LE will validate immediately when we call completeChallenge.
-    const order = await client.createOrder({
-      identifiers: domainList.map((d) => ({ type: "dns", value: d })),
-    });
-
+    // Step 3: Resume the EXACT existing order (same tokens the user uploaded)
+    const order = await client.getOrder({ url: orderUrl } as acme.Order);
     const authorizations = await client.getAuthorizations(order);
 
+    // Step 4: Complete each challenge — files are already uploaded and verified above
     for (const authz of authorizations) {
       const challenge = authz.challenges.find((c: any) => c.type === "http-01");
       if (!challenge) {
@@ -140,32 +125,11 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-
-      // The new order may have a different token — update the file check
-      const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
-      const url = `http://${authz.identifier.value}/.well-known/acme-challenge/${challenge.token}`;
-
-      const fetchRes = await fetch(url, { headers: { "User-Agent": "EasySSL/1.0" } });
-
-      if (!fetchRes.ok || (await fetchRes.text()).trim() !== keyAuthorization.trim()) {
-        // Token changed — inform user they need to re-upload
-        return NextResponse.json(
-          {
-            error: `Let's Encrypt issued a new challenge token for ${authz.identifier.value}.`,
-            hint: `Please go back, download the new verification file, and upload it.`,
-            newToken: challenge.token,
-            newFileContent: keyAuthorization,
-            needsRestart: true,
-          },
-          { status: 400 }
-        );
-      }
-
       await client.completeChallenge(challenge);
       await client.waitForValidStatus(challenge);
     }
 
-    // Finalize and get certificate
+    // Step 5: Finalize order and get certificate
     await client.finalizeOrder(order, csrBuffer);
     const certChain = await client.getCertificate(order);
 
@@ -188,16 +152,12 @@ export async function POST(request: NextRequest) {
 
     await db.delete(acmeChallenges).where(eq(acmeChallenges.userId, user.id));
 
-    // Build ZIP
     const zip = new JSZip();
     zip.file(`${apexDomain}.crt`, certificate);
     zip.file(`${apexDomain}.key`, csrKeyPem);
     if (caCertificate) zip.file(`${apexDomain}-ca-bundle.crt`, caCertificate);
     const coveredDomains = domainList.join(", ");
-    zip.file(
-      "README.txt",
-      `SSL Certificate for ${apexDomain}\nDomains: ${coveredDomains}\nExpires: ${expiryDate.toLocaleDateString()}\n`
-    );
+    zip.file("README.txt", `SSL Certificate for ${apexDomain}\nDomains: ${coveredDomains}\nExpires: ${expiryDate.toLocaleDateString()}\n`);
 
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
