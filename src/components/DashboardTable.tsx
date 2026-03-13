@@ -102,7 +102,8 @@ export default function DashboardTable({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename;
+      // For .htaccess, some browsers strip the dot — server header handles it
+      a.setAttribute("download", filename);
       a.click();
       URL.revokeObjectURL(url);
       // Show instructions after download
