@@ -347,9 +347,8 @@ export default function AdminDashboard() {
 
                               {/* Impersonate */}
                               <button
-                                onClick={() => userAction("impersonate", user.id)}
-                                disabled={!!actionLoading}
-                                title="Impersonate user"
+                                onClick={() => window.open(`https://dashboard.clerk.com/`, "_blank")}
+                                title="Manage in Clerk Dashboard"
                                 className="p-1.5 rounded-lg border border-blue-300 text-blue-600 hover:bg-blue-50"
                               >
                                 <LogIn className="w-3.5 h-3.5" />
