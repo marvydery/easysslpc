@@ -10,14 +10,13 @@ declare global {
   }
 }
 
-const PLANS = [
+const PLAN_UI = [
   {
     id: "pro",
     name: "Pro",
     price: "$29",
     period: "/ year",
     tagline: "Billed annually — cancel anytime",
-    priceIdEnv: process.env.NEXT_PUBLIC_PADDLE_YEARLY_PRICE_ID,
     color: "blue",
     icon: Zap,
     features: [
@@ -34,7 +33,6 @@ const PLANS = [
     price: "$49",
     period: " one-time",
     tagline: "Pay once, own forever",
-    priceIdEnv: process.env.NEXT_PUBLIC_PADDLE_LIFETIME_PRICE_ID,
     color: "purple",
     icon: Crown,
     features: [
@@ -53,16 +51,30 @@ export default function UpgradePage() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paddleReady, setPaddleReady] = useState(false);
+  const [config, setConfig] = useState<{
+    clientToken: string;
+    yearlyPriceId: string;
+    lifetimePriceId: string;
+  } | null>(null);
 
+  // Step 1 — fetch config (price IDs + client token) from our server
   useEffect(() => {
-    // Wait for Paddle.js to be ready (loaded in layout.tsx)
+    fetch("/api/paddle/config")
+      .then((r) => r.json())
+      .then((data) => setConfig(data))
+      .catch(() => setError("Failed to load payment config. Please refresh."));
+  }, []);
+
+  // Step 2 — once we have the client token, initialise Paddle
+  useEffect(() => {
+    if (!config?.clientToken) return;
+
     const interval = setInterval(() => {
       if (window.Paddle) {
         window.Paddle.Initialize({
-          token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN,
+          token: config.clientToken,
           eventCallback: (data: any) => {
             if (data.name === "checkout.completed") {
-              // Payment complete — redirect to dashboard
               window.location.href = "/dashboard?upgraded=1";
             }
             if (data.name === "checkout.closed") {
@@ -76,26 +88,25 @@ export default function UpgradePage() {
     }, 200);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [config]);
 
-  async function handleUpgrade(plan: typeof PLANS[0]) {
-    if (!paddleReady || !window.Paddle) {
+  async function handleUpgrade(planId: string) {
+    if (!paddleReady || !window.Paddle || !config) {
       setError("Payment system not ready. Please refresh and try again.");
       return;
     }
 
-    setLoading(plan.id);
+    setLoading(planId);
     setError(null);
 
     try {
-      // Fetch the user's email from our API to pre-fill checkout
       const res = await fetch("/api/user/me");
       const { email } = await res.json();
 
       const priceId =
-        plan.id === "pro"
-          ? process.env.NEXT_PUBLIC_PADDLE_YEARLY_PRICE_ID
-          : process.env.NEXT_PUBLIC_PADDLE_LIFETIME_PRICE_ID;
+        planId === "pro" ? config.yearlyPriceId : config.lifetimePriceId;
+
+      console.log("[Paddle] Opening checkout with priceId:", priceId);
 
       window.Paddle.Checkout.open({
         items: [{ priceId, quantity: 1 }],
@@ -114,7 +125,6 @@ export default function UpgradePage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white border-b">
         <div className="container mx-auto px-4 py-4 flex items-center gap-4">
           <Link href="/dashboard" className="flex items-center gap-2 text-gray-600 hover:text-gray-900">
@@ -128,9 +138,7 @@ export default function UpgradePage() {
 
       <main className="container mx-auto px-4 py-12 max-w-4xl">
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Upgrade Your Plan
-          </h1>
+          <h1 className="text-4xl font-bold text-gray-900 mb-4">Upgrade Your Plan</h1>
           <p className="text-lg text-gray-600">
             Get automatic renewals, more domains, and peace of mind.
           </p>
@@ -143,7 +151,7 @@ export default function UpgradePage() {
         )}
 
         <div className="grid md:grid-cols-2 gap-8">
-          {PLANS.map((plan) => {
+          {PLAN_UI.map((plan) => {
             const Icon = plan.icon;
             const isPurple = plan.color === "purple";
             return (
@@ -178,12 +186,14 @@ export default function UpgradePage() {
                 </ul>
 
                 <button
-                  onClick={() => handleUpgrade(plan)}
-                  disabled={!!loading || !paddleReady}
+                  onClick={() => handleUpgrade(plan.id)}
+                  disabled={!!loading || !paddleReady || !config}
                   className="w-full py-3 px-6 bg-white text-gray-900 rounded-xl font-bold hover:bg-gray-50 transition disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {loading === plan.id
                     ? "Opening checkout…"
+                    : !config
+                    ? "Loading…"
                     : `Get ${plan.name} — ${plan.price}`}
                 </button>
               </div>
@@ -193,8 +203,7 @@ export default function UpgradePage() {
 
         <div className="mt-10 text-center text-sm text-gray-500">
           <p>
-            Payments are processed securely by{" "}
-            <strong>Paddle</strong>. Your card details never touch our servers.
+            Payments are processed securely by <strong>Paddle</strong>. Your card details never touch our servers.
           </p>
           <p className="mt-2">
             <Link href="/dashboard" className="underline hover:text-gray-700">
