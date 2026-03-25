@@ -1,9 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import { Lock, Check, Crown, Zap } from "lucide-react";
 import Link from "next/link";
+
+declare global {
+  interface Window {
+    Paddle: any;
+  }
+}
 
 const PLANS = [
   {
@@ -11,8 +16,8 @@ const PLANS = [
     name: "Pro",
     price: "$29",
     period: "/ year",
-    tagline: "Billed annually",
-    domains: 5,
+    tagline: "Billed annually — cancel anytime",
+    priceIdEnv: process.env.NEXT_PUBLIC_PADDLE_YEARLY_PRICE_ID,
     color: "blue",
     icon: Zap,
     features: [
@@ -29,7 +34,7 @@ const PLANS = [
     price: "$49",
     period: " one-time",
     tagline: "Pay once, own forever",
-    domains: 10,
+    priceIdEnv: process.env.NEXT_PUBLIC_PADDLE_LIFETIME_PRICE_ID,
     color: "purple",
     icon: Crown,
     features: [
@@ -45,29 +50,64 @@ const PLANS = [
 ];
 
 export default function UpgradePage() {
-  const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [paddleReady, setPaddleReady] = useState(false);
 
-  async function handleUpgrade(plan: string) {
-    setLoading(plan);
-    setError(null);
-    try {
-      const res = await fetch("/api/paystack/initialize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to start payment");
+  useEffect(() => {
+    // Wait for Paddle.js to be ready (loaded in layout.tsx)
+    const interval = setInterval(() => {
+      if (window.Paddle) {
+        window.Paddle.Initialize({
+          token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN,
+          eventCallback: (data: any) => {
+            if (data.name === "checkout.completed") {
+              // Payment complete — redirect to dashboard
+              window.location.href = "/dashboard?upgraded=1";
+            }
+            if (data.name === "checkout.closed") {
+              setLoading(null);
+            }
+          },
+        });
+        setPaddleReady(true);
+        clearInterval(interval);
       }
+    }, 200);
 
-      // Redirect to Paystack checkout
-      window.location.href = data.authorization_url;
+    return () => clearInterval(interval);
+  }, []);
+
+  async function handleUpgrade(plan: typeof PLANS[0]) {
+    if (!paddleReady || !window.Paddle) {
+      setError("Payment system not ready. Please refresh and try again.");
+      return;
+    }
+
+    setLoading(plan.id);
+    setError(null);
+
+    try {
+      // Fetch the user's email from our API to pre-fill checkout
+      const res = await fetch("/api/user/me");
+      const { email } = await res.json();
+
+      const priceId =
+        plan.id === "pro"
+          ? process.env.NEXT_PUBLIC_PADDLE_YEARLY_PRICE_ID
+          : process.env.NEXT_PUBLIC_PADDLE_LIFETIME_PRICE_ID;
+
+      window.Paddle.Checkout.open({
+        items: [{ priceId, quantity: 1 }],
+        customer: { email },
+        settings: {
+          displayMode: "overlay",
+          theme: "light",
+          locale: "en",
+        },
+      });
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || "Failed to open checkout");
       setLoading(null);
     }
   }
@@ -138,12 +178,12 @@ export default function UpgradePage() {
                 </ul>
 
                 <button
-                  onClick={() => handleUpgrade(plan.id)}
-                  disabled={!!loading}
+                  onClick={() => handleUpgrade(plan)}
+                  disabled={!!loading || !paddleReady}
                   className="w-full py-3 px-6 bg-white text-gray-900 rounded-xl font-bold hover:bg-gray-50 transition disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {loading === plan.id
-                    ? "Redirecting to payment…"
+                    ? "Opening checkout…"
                     : `Get ${plan.name} — ${plan.price}`}
                 </button>
               </div>
@@ -154,7 +194,7 @@ export default function UpgradePage() {
         <div className="mt-10 text-center text-sm text-gray-500">
           <p>
             Payments are processed securely by{" "}
-            <strong>Paystack</strong>. You will be redirected to complete payment.
+            <strong>Paddle</strong>. Your card details never touch our servers.
           </p>
           <p className="mt-2">
             <Link href="/dashboard" className="underline hover:text-gray-700">
