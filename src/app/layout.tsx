@@ -25,6 +25,11 @@ export default async function RootLayout({
     <ClerkProvider>
       <html lang="en">
         <body className={inter.className}>
+          {/* Paddle.js — must load before any checkout calls */}
+          <Script
+            src="https://cdn.paddle.com/paddle/v2/paddle.js"
+            strategy="beforeInteractive"
+          />
           {children}
           <Analytics />
           <SpeedInsights />
