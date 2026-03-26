@@ -12,6 +12,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/cron(.*)',
   '/api/ssl/check(.*)',
   '/api/paystack/webhook(.*)',
+  '/api/paddle/webhook(.*)',  // ← added
 ]);
 
 export default clerkMiddleware((auth, request) => {
