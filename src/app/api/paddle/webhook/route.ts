@@ -5,6 +5,24 @@ import { eq } from "drizzle-orm";
 import { verifyPaddleWebhook } from "@/lib/paddle";
 
 const WEBHOOK_SECRET = process.env.PADDLE_WEBHOOK_SECRET!;
+const PADDLE_API_KEY = process.env.PADDLE_API_KEY!;
+
+/**
+ * Fetch customer email from Paddle API using customer_id.
+ * The v1 webhook payload does not include email — we must look it up.
+ */
+async function getCustomerEmail(customerId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.paddle.com/customers/${customerId}`, {
+      headers: { Authorization: `Bearer ${PADDLE_API_KEY}` },
+    });
+    const json = await res.json() as { data?: { email?: string } };
+    return json.data?.email ?? null;
+  } catch (err) {
+    console.error("[Paddle Webhook] Failed to fetch customer:", err);
+    return null;
+  }
+}
 
 /**
  * Maps Paddle price IDs to our internal subscription tiers.
@@ -30,16 +48,15 @@ export async function POST(req: NextRequest) {
     event_type: string;
     data: {
       id: string;
-      status: string;
+      status?: string;
       customer_id: string;
-      customer?: { email: string };
       items?: Array<{ price: { id: string } }>;
-      subscription_id?: string;
-      custom_data?: { user_id?: string; clerk_id?: string };
     };
   };
 
-  console.log(`[Paddle Webhook] Event: ${event.event_type}`);
+  console.log(`[Paddle Webhook] Event: ${event.event_type}`, {
+    customerId: event.data.customer_id,
+  });
 
   try {
     switch (event.event_type) {
@@ -49,24 +66,29 @@ export async function POST(req: NextRequest) {
       case "subscription.activated": {
         const priceId = event.data.items?.[0]?.price?.id;
         const tier = priceId ? getTierFromPriceId(priceId) : null;
-        const email = event.data.customer?.email;
-        const paddleCustomerId = event.data.customer_id;
+        const customerId = event.data.customer_id;
 
-        if (!email || !tier) {
-          console.error("[Paddle Webhook] Missing email or unrecognised price ID");
+        if (!tier) {
+          console.error("[Paddle Webhook] Unrecognised price ID:", priceId);
           break;
         }
 
-        await db
+        const email = await getCustomerEmail(customerId);
+        if (!email) {
+          console.error("[Paddle Webhook] Could not fetch email for customer:", customerId);
+          break;
+        }
+
+        const result = await db
           .update(users)
           .set({
             subscriptionTier: tier,
-            stripeCustomerId: paddleCustomerId, // reusing this column for Paddle customer ID
+            stripeCustomerId: customerId,
             updatedAt: new Date(),
           })
           .where(eq(users.email, email));
 
-        console.log(`[Paddle Webhook] Upgraded ${email} to ${tier}`);
+        console.log(`[Paddle Webhook] ✅ Upgraded ${email} to ${tier}`);
         break;
       }
 
@@ -76,11 +98,17 @@ export async function POST(req: NextRequest) {
       case "transaction.completed": {
         const priceId = event.data.items?.[0]?.price?.id;
         const tier = priceId ? getTierFromPriceId(priceId) : null;
-        const email = event.data.customer?.email;
-        const paddleCustomerId = event.data.customer_id;
+        const customerId = event.data.customer_id;
 
-        if (!email || !tier) {
-          // Not one of our tracked products — ignore
+        if (!tier) {
+          // Not one of our tracked products — ignore silently
+          console.log("[Paddle Webhook] transaction.completed — not a tracked price, ignoring");
+          break;
+        }
+
+        const email = await getCustomerEmail(customerId);
+        if (!email) {
+          console.error("[Paddle Webhook] Could not fetch email for customer:", customerId);
           break;
         }
 
@@ -88,12 +116,12 @@ export async function POST(req: NextRequest) {
           .update(users)
           .set({
             subscriptionTier: tier,
-            stripeCustomerId: paddleCustomerId,
+            stripeCustomerId: customerId,
             updatedAt: new Date(),
           })
           .where(eq(users.email, email));
 
-        console.log(`[Paddle Webhook] transaction.completed → ${email} to ${tier}`);
+        console.log(`[Paddle Webhook] ✅ transaction.completed → ${email} to ${tier}`);
         break;
       }
 
@@ -101,7 +129,8 @@ export async function POST(req: NextRequest) {
        * Subscription cancelled — downgrade back to free
        */
       case "subscription.canceled": {
-        const email = event.data.customer?.email;
+        const customerId = event.data.customer_id;
+        const email = await getCustomerEmail(customerId);
 
         if (!email) break;
 
@@ -113,7 +142,7 @@ export async function POST(req: NextRequest) {
           })
           .where(eq(users.email, email));
 
-        console.log(`[Paddle Webhook] Downgraded ${email} to free`);
+        console.log(`[Paddle Webhook] ✅ Downgraded ${email} to free`);
         break;
       }
 
