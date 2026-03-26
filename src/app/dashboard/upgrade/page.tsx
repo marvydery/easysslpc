@@ -69,16 +69,14 @@ export default function UpgradePage() {
       .catch((e) => setError("Failed to load payment config: " + e.message));
   }, []);
 
-  // Step 2 — load Paddle script dynamically and initialize
+  // Step 2 — initialize Paddle once config is ready
   useEffect(() => {
     if (!config?.clientToken || paddleInitialized.current) return;
 
     function initPaddle() {
       if (paddleInitialized.current) return;
       try {
-        window.Paddle.Setup({ // v1 API uses Setup not Initialize
-          seller: undefined, // not needed for client token auth
-        });
+        // Per Paddle docs: just call Initialize() with the token — no Setup() needed
         window.Paddle.Initialize({
           token: config!.clientToken,
           eventCallback: (data: any) => {
@@ -93,7 +91,7 @@ export default function UpgradePage() {
         });
         paddleInitialized.current = true;
         setPaddleReady(true);
-        console.log("[Paddle] Initialized successfully");
+        console.log("[Paddle] Initialized successfully with token:", config!.clientToken.slice(0, 10) + "...");
       } catch (e: any) {
         console.error("[Paddle] Init error:", e);
         setError("Payment system failed to initialize: " + e.message);
@@ -103,12 +101,18 @@ export default function UpgradePage() {
     if (window.Paddle) {
       initPaddle();
     } else {
-      // Load script dynamically as fallback
-      const script = document.createElement("script");
-      script.src = "https://cdn.paddle.com/paddle/v2/paddle.js";
-      script.onload = () => initPaddle();
-      script.onerror = () => setError("Failed to load Paddle.js");
-      document.head.appendChild(script);
+      // Dynamically load Paddle.js if not already present
+      const existing = document.querySelector('script[src*="paddle.js"]');
+      if (existing) {
+        // Script tag exists but Paddle object not ready yet — wait for it
+        existing.addEventListener("load", initPaddle);
+      } else {
+        const script = document.createElement("script");
+        script.src = "https://cdn.paddle.com/paddle/v2/paddle.js";
+        script.onload = initPaddle;
+        script.onerror = () => setError("Failed to load Paddle.js. Please refresh.");
+        document.head.appendChild(script);
+      }
     }
   }, [config]);
 
