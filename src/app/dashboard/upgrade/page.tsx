@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Lock, Check, Crown, Zap } from "lucide-react";
 import Link from "next/link";
 
@@ -56,24 +56,33 @@ export default function UpgradePage() {
     yearlyPriceId: string;
     lifetimePriceId: string;
   } | null>(null);
+  const paddleInitialized = useRef(false);
 
-  // Step 1 — fetch config (price IDs + client token) from our server
+  // Step 1 — fetch config from server
   useEffect(() => {
     fetch("/api/paddle/config")
       .then((r) => r.json())
-      .then((data) => setConfig(data))
-      .catch(() => setError("Failed to load payment config. Please refresh."));
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setConfig(data);
+      })
+      .catch((e) => setError("Failed to load payment config: " + e.message));
   }, []);
 
-  // Step 2 — once we have the client token, initialise Paddle
+  // Step 2 — load Paddle script dynamically and initialize
   useEffect(() => {
-    if (!config?.clientToken) return;
+    if (!config?.clientToken || paddleInitialized.current) return;
 
-    const interval = setInterval(() => {
-      if (window.Paddle) {
+    function initPaddle() {
+      if (paddleInitialized.current) return;
+      try {
+        window.Paddle.Setup({ // v1 API uses Setup not Initialize
+          seller: undefined, // not needed for client token auth
+        });
         window.Paddle.Initialize({
-          token: config.clientToken,
+          token: config!.clientToken,
           eventCallback: (data: any) => {
+            console.log("[Paddle Event]", data.name);
             if (data.name === "checkout.completed") {
               window.location.href = "/dashboard?upgraded=1";
             }
@@ -82,12 +91,25 @@ export default function UpgradePage() {
             }
           },
         });
+        paddleInitialized.current = true;
         setPaddleReady(true);
-        clearInterval(interval);
+        console.log("[Paddle] Initialized successfully");
+      } catch (e: any) {
+        console.error("[Paddle] Init error:", e);
+        setError("Payment system failed to initialize: " + e.message);
       }
-    }, 200);
+    }
 
-    return () => clearInterval(interval);
+    if (window.Paddle) {
+      initPaddle();
+    } else {
+      // Load script dynamically as fallback
+      const script = document.createElement("script");
+      script.src = "https://cdn.paddle.com/paddle/v2/paddle.js";
+      script.onload = () => initPaddle();
+      script.onerror = () => setError("Failed to load Paddle.js");
+      document.head.appendChild(script);
+    }
   }, [config]);
 
   async function handleUpgrade(planId: string) {
@@ -101,12 +123,13 @@ export default function UpgradePage() {
 
     try {
       const res = await fetch("/api/user/me");
+      if (!res.ok) throw new Error("Could not fetch user info");
       const { email } = await res.json();
 
       const priceId =
         planId === "pro" ? config.yearlyPriceId : config.lifetimePriceId;
 
-      console.log("[Paddle] Opening checkout with priceId:", priceId);
+      console.log("[Paddle] Opening checkout:", { planId, priceId, email });
 
       window.Paddle.Checkout.open({
         items: [{ priceId, quantity: 1 }],
@@ -115,9 +138,11 @@ export default function UpgradePage() {
           displayMode: "overlay",
           theme: "light",
           locale: "en",
+          successUrl: `${window.location.origin}/dashboard?upgraded=1`,
         },
       });
     } catch (err: any) {
+      console.error("[Paddle] Checkout error:", err);
       setError(err.message || "Failed to open checkout");
       setLoading(null);
     }
