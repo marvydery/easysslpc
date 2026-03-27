@@ -158,10 +158,6 @@ export default function AdminDashboard() {
     return <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${colors[tier]}`}>{tier}</span>;
   };
 
-  const ghs = (pesewas: string | number) => `GHS ${(Number(pesewas) / 100).toFixed(2)}`;
-  const usd = (pesewas: string | number, rate: string) =>
-    `~$${(Number(pesewas) / 100 / Number(rate || 12)).toFixed(2)}`;
-
   const tabs: { id: Tab; label: string; icon: any }[] = [
     { id: "overview", label: "Overview", icon: BarChart3 },
     { id: "users", label: "Users", icon: Users },
@@ -319,7 +315,6 @@ export default function AdminDashboard() {
                         <td className="px-4 py-3">
                           {!user.isAdmin && (
                             <div className="flex items-center gap-2 flex-wrap">
-                              {/* Change tier */}
                               <select
                                 defaultValue={user.subscriptionTier}
                                 onChange={(e) => userAction("change_tier", user.id, { tier: e.target.value })}
@@ -331,7 +326,6 @@ export default function AdminDashboard() {
                                 <option value="lifetime">Lifetime</option>
                               </select>
 
-                              {/* Suspend/Unsuspend */}
                               <button
                                 onClick={() => userAction(user.isSuspended ? "unsuspend" : "suspend", user.id)}
                                 disabled={actionLoading === `${user.isSuspended ? "unsuspend" : "suspend"}-${user.id}`}
@@ -345,7 +339,6 @@ export default function AdminDashboard() {
                                 {user.isSuspended ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
                               </button>
 
-                              {/* Impersonate */}
                               <button
                                 onClick={() => window.open(`https://dashboard.clerk.com/`, "_blank")}
                                 title="Manage in Clerk Dashboard"
@@ -354,7 +347,6 @@ export default function AdminDashboard() {
                                 <LogIn className="w-3.5 h-3.5" />
                               </button>
 
-                              {/* Delete */}
                               <button
                                 onClick={() => userAction("delete", user.id)}
                                 disabled={!!actionLoading}
@@ -380,69 +372,44 @@ export default function AdminDashboard() {
           {/* ── PRICING ──────────────────────────────────────────────────── */}
           {activeTab === "pricing" && (
             <div className="space-y-6">
-              <h2 className="text-xl font-bold text-gray-900">Pricing Management</h2>
-              <div className="bg-white rounded-xl border p-6 space-y-6 max-w-xl">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">USD → GHS Peg Rate</label>
-                  <input
-                    type="number"
-                    value={localSettings["usd_to_ghs_rate"] ?? "12"}
-                    onChange={(e) => setLocalSettings((p) => ({ ...p, usd_to_ghs_rate: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g. 12"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Used to display USD equivalent in the dashboard</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
-                  <select
-                    value={localSettings["paystack_currency"] ?? "GHS"}
-                    onChange={(e) => setLocalSettings((p) => ({ ...p, paystack_currency: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <h2 className="text-xl font-bold text-gray-900">Pricing</h2>
+              <div className="bg-white rounded-xl border p-6 space-y-4 max-w-xl">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+                  <p className="font-semibold mb-1">💳 Pricing is managed in Paddle</p>
+                  <p>To change prices, update your products in the Paddle dashboard. Price changes take effect immediately for new checkouts.</p>
+                  <a
+                    href="https://vendors.paddle.com/products-v2"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
                   >
-                    <option value="GHS">GHS — Ghanaian Cedi</option>
-                    <option value="NGN">NGN — Nigerian Naira</option>
-                    <option value="USD">USD — US Dollar</option>
-                    <option value="KES">KES — Kenyan Shilling</option>
-                  </select>
+                    Open Paddle Dashboard →
+                  </a>
                 </div>
 
-                {[
-                  { key: "paystack_pro_amount", label: "Pro Plan Amount (pesewas)", usdLabel: "Pro" },
-                  { key: "paystack_lifetime_amount", label: "Lifetime Plan Amount (pesewas)", usdLabel: "Lifetime" },
-                ].map(({ key, label, usdLabel }) => (
-                  <div key={key}>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-                    <input
-                      type="number"
-                      value={localSettings[key] ?? ""}
-                      onChange={(e) => setLocalSettings((p) => ({ ...p, [key]: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g. 34800"
-                    />
-                    {localSettings[key] && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        = {ghs(localSettings[key])} &nbsp;·&nbsp;
-                        {usd(localSettings[key], localSettings["usd_to_ghs_rate"])}
-                      </p>
-                    )}
+                <div className="border rounded-lg divide-y text-sm">
+                  <div className="px-4 py-3 flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-gray-900">Free Plan</p>
+                      <p className="text-xs text-gray-500">1 domain · 90-day manual renewal</p>
+                    </div>
+                    <span className="text-gray-700 font-semibold">$0</span>
                   </div>
-                ))}
-
-                <button
-                  onClick={() => saveSettings({
-                    paystack_pro_amount: localSettings["paystack_pro_amount"],
-                    paystack_lifetime_amount: localSettings["paystack_lifetime_amount"],
-                    paystack_currency: localSettings["paystack_currency"],
-                    usd_to_ghs_rate: localSettings["usd_to_ghs_rate"],
-                  })}
-                  disabled={loading}
-                  className="w-full py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  <Save className="w-4 h-4" />
-                  {loading ? "Saving..." : "Save Pricing"}
-                </button>
+                  <div className="px-4 py-3 flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-gray-900">Pro Plan</p>
+                      <p className="text-xs text-gray-500">5 domains · auto-renewal · billed annually</p>
+                    </div>
+                    <span className="text-blue-700 font-semibold">$29/yr</span>
+                  </div>
+                  <div className="px-4 py-3 flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-gray-900">Lifetime Plan</p>
+                      <p className="text-xs text-gray-500">10 domains · auto-renewal · one-time</p>
+                    </div>
+                    <span className="text-purple-700 font-semibold">$49</span>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -467,11 +434,14 @@ export default function AdminDashboard() {
                   <p className="text-xs text-orange-600 mt-1">⚠️ Staging certificates are not trusted by browsers</p>
                 </div>
 
-                {/* Paystack keys */}
+                {/* Paddle keys */}
                 {[
-                  { key: "paystack_public_key", label: "Paystack Public Key", prefix: "pk_" },
-                  { key: "paystack_secret_key", label: "Paystack Secret Key", prefix: "sk_" },
-                ].map(({ key, label, prefix }) => (
+                  { key: "paddle_api_key", label: "Paddle API Key", placeholder: "pdl_live_apikey_..." },
+                  { key: "paddle_webhook_secret", label: "Paddle Webhook Secret", placeholder: "pdl_ntfset_..." },
+                  { key: "paddle_client_token", label: "Paddle Client Token", placeholder: "live_..." },
+                  { key: "paddle_yearly_price_id", label: "Pro Plan Price ID", placeholder: "pri_..." },
+                  { key: "paddle_lifetime_price_id", label: "Lifetime Plan Price ID", placeholder: "pri_..." },
+                ].map(({ key, label, placeholder }) => (
                   <div key={key}>
                     <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
                     <div className="relative">
@@ -480,7 +450,7 @@ export default function AdminDashboard() {
                         value={localSettings[key] ?? ""}
                         onChange={(e) => setLocalSettings((p) => ({ ...p, [key]: e.target.value }))}
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder={`${prefix}live_...`}
+                        placeholder={placeholder}
                       />
                       <button
                         type="button"
@@ -495,16 +465,19 @@ export default function AdminDashboard() {
 
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                   <p className="text-xs text-yellow-800">
-                    <strong>Note:</strong> Keys saved here override environment variables. 
-                    Paystack secret key is sensitive — only change if you&apos;re rotating keys.
+                    <strong>Note:</strong> Keys saved here override Vercel environment variables.
+                    These are sensitive — only update if you are rotating keys.
                   </p>
                 </div>
 
                 <button
                   onClick={() => saveSettings({
                     acme_environment: localSettings["acme_environment"],
-                    paystack_public_key: localSettings["paystack_public_key"],
-                    paystack_secret_key: localSettings["paystack_secret_key"],
+                    paddle_api_key: localSettings["paddle_api_key"],
+                    paddle_webhook_secret: localSettings["paddle_webhook_secret"],
+                    paddle_client_token: localSettings["paddle_client_token"],
+                    paddle_yearly_price_id: localSettings["paddle_yearly_price_id"],
+                    paddle_lifetime_price_id: localSettings["paddle_lifetime_price_id"],
                   })}
                   disabled={loading}
                   className="w-full py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm flex items-center justify-center gap-2 disabled:opacity-50"
@@ -554,7 +527,6 @@ export default function AdminDashboard() {
                   />
                 </div>
 
-                {/* Maintenance mode */}
                 <div className="flex items-center justify-between p-4 border border-red-200 bg-red-50 rounded-lg">
                   <div>
                     <p className="font-medium text-red-800 text-sm">Maintenance Mode</p>
@@ -625,7 +597,7 @@ export default function AdminDashboard() {
 
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
                   <p className="font-semibold mb-1">✅ Automatic setup</p>
-                  <p>Once saved, Google Analytics will load automatically on every page. No code changes needed. To disable tracking, simply clear the ID and save.</p>
+                  <p>Once saved, Google Analytics will load automatically on every page. No code changes needed.</p>
                 </div>
 
                 <button
