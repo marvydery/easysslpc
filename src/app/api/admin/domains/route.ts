@@ -1,19 +1,19 @@
 /**
  * src/app/api/admin/domains/route.ts
  * GET    — fetch all domains with owner, certificate status, expiry
- * POST   — trigger manual renewal for a specific domain
+ * POST   — trigger manual renewal (Phase 1: create challenge, Phase 2: finalize)
  * DELETE — permanently delete a domain and all its data
  */
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
+import { encrypt } from "@/lib/crypto";
 import { eq, and, desc } from "drizzle-orm";
+import * as acme from "acme-client";
 import * as https from "https";
 import * as http from "http";
-import * as acme from "acme-client";
 import JSZip from "jszip";
-import { encrypt } from "@/lib/crypto";
 import { sendCertificateEmail, sendAdminRenewalSuccess, sendAdminRenewalFailure } from "@/lib/email";
 
 const ACME_DIRECTORY_URL =
@@ -35,22 +35,22 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
   };
 }
 
-
-// Check bridge by trying https (ignoring expired cert) then falling back to http
-async function checkBridge(domain: string, token: string, keyAuthorization: string): Promise<{ ok: boolean; url: string }> {
+// Check bridge by calling bridge.php?token= directly (most reliable),
+// then falling back to bare token URL, trying https before http each time
+async function checkBridge(
+  domain: string,
+  token: string,
+  keyAuthorization: string
+): Promise<{ ok: boolean; url: string }> {
   function tryUrl(url: string): Promise<boolean> {
     return new Promise((resolve) => {
       const isHttps = url.startsWith("https");
       const requester = isHttps ? https : http;
-      const options: any = {
-        timeout: 5000,
-        headers: { "User-Agent": "EasySSL-Admin/1.0" },
-      };
+      const options: any = { timeout: 5000, headers: { "User-Agent": "EasySSL-Admin/1.0" } };
       if (isHttps) options.rejectUnauthorized = false;
-
       const req = (requester as any).get(url, options, (res: any) => {
         let data = "";
-        res.on("data", (chunk: any) => (data += chunk));
+        res.on("data", (c: any) => (data += c));
         res.on("end", () => resolve(data.trim() === keyAuthorization.trim()));
       });
       req.on("error", () => resolve(false));
@@ -58,14 +58,14 @@ async function checkBridge(domain: string, token: string, keyAuthorization: stri
     });
   }
 
-  // Try bridge.php directly first (handles sites with HTTP→HTTPS redirects)
+  // Try bridge.php?token= directly first (bypasses htaccess rewrite)
   const bridgeHttps = `https://${domain}/.well-known/acme-challenge/bridge.php?token=${token}`;
   if (await tryUrl(bridgeHttps)) return { ok: true, url: bridgeHttps };
 
   const bridgeHttp = `http://${domain}/.well-known/acme-challenge/bridge.php?token=${token}`;
   if (await tryUrl(bridgeHttp)) return { ok: true, url: bridgeHttp };
 
-  // Fall back to direct token URL (for non-bridge setups)
+  // Fall back to bare token URL
   const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
   if (await tryUrl(httpsUrl)) return { ok: true, url: httpsUrl };
 
@@ -96,7 +96,6 @@ export async function GET(request: NextRequest) {
       .innerJoin(users, eq(domains.userId, users.id))
       .orderBy(desc(domains.createdAt));
 
-    // For each domain, get latest certificate
     const result = await Promise.all(
       allDomains.map(async ({ domain, user }) => {
         const [latestCert] = await db
@@ -160,7 +159,6 @@ export async function POST(request: NextRequest) {
     const { domainId } = await request.json();
     if (!domainId) return NextResponse.json({ error: "domainId required" }, { status: 400 });
 
-    // Load domain + owner
     const [row] = await db
       .select({ domain: domains, user: users })
       .from(domains)
@@ -169,20 +167,21 @@ export async function POST(request: NextRequest) {
       .limit(1);
 
     if (!row) return NextResponse.json({ error: "Domain not found" }, { status: 404 });
-
     const { domain, user } = row;
 
-    // Check if bridge is reachable first
-    const [existingChallenge] = await db
-      .select()
-      .from(acmeChallenges)
-      .where(
-        and(eq(acmeChallenges.userId, user.id), eq(acmeChallenges.domain, domain.domainName))
-      )
-      .limit(1);
+    const apexDomain = domain.domainName.startsWith("www.")
+      ? domain.domainName.slice(4)
+      : domain.domainName;
+    const wwwDomain = `www.${apexDomain}`;
 
-    // ── Phase 1: Create challenge if none exists ──
-    if (!existingChallenge) {
+    // Check for existing pending challenges
+    const allChallenges = await db.select().from(acmeChallenges).where(eq(acmeChallenges.userId, user.id));
+    const existingChallenges = allChallenges.filter(
+      (c) => c.domain === apexDomain || c.domain === wwwDomain
+    );
+
+    // ── Phase 1: Create challenges for apex + www ──────────────────────────
+    if (existingChallenges.length === 0) {
       const accountKey = await acme.crypto.createPrivateKey();
       const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
 
@@ -191,70 +190,74 @@ export async function POST(request: NextRequest) {
         contact: [`mailto:${user.email}`],
       });
 
-      const [csrKey, csr] = await acme.crypto.createCsr({ commonName: domain.domainName });
+      const [csrKey, csr] = await acme.crypto.createCsr({
+        commonName: apexDomain,
+        altNames: [apexDomain, wwwDomain],
+      });
 
       const order = await client.createOrder({
-        identifiers: [{ type: "dns", value: domain.domainName }],
+        identifiers: [
+          { type: "dns", value: apexDomain },
+          { type: "dns", value: wwwDomain },
+        ],
       });
 
       const authorizations = await client.getAuthorizations(order);
-      const authz = authorizations[0];
-      const challenge = authz.challenges.find((c: any) => c.type === "http-01");
-      if (!challenge) throw new Error("No HTTP-01 challenge found");
 
-      const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
+      for (const authz of authorizations) {
+        const ch = authz.challenges.find((c: any) => c.type === "http-01");
+        if (!ch) throw new Error(`No HTTP-01 challenge for ${authz.identifier.value}`);
+        const kAuth = await client.getChallengeKeyAuthorization(ch);
 
-      await db.insert(acmeChallenges).values({
-        userId: user.id,
-        domain: domain.domainName,
-        token: challenge.token,
-        keyAuthorization,
-        orderUrl: order.url,
-        accountKeyPem: accountKey.toString(),
-        csrKeyPem: csrKey.toString(),
-        csrDer: csr.toString("base64"),
-      }).onConflictDoUpdate({
-        target: [acmeChallenges.userId, acmeChallenges.domain],
-        set: {
-          token: challenge.token,
-          keyAuthorization,
+        await db.insert(acmeChallenges).values({
+          userId: user.id,
+          domain: authz.identifier.value,
+          token: ch.token,
+          keyAuthorization: kAuth,
           orderUrl: order.url,
           accountKeyPem: accountKey.toString(),
           csrKeyPem: csrKey.toString(),
           csrDer: csr.toString("base64"),
-          createdAt: new Date(),
-        },
-      });
+        }).onConflictDoUpdate({
+          target: [acmeChallenges.userId, acmeChallenges.domain],
+          set: {
+            token: ch.token,
+            keyAuthorization: kAuth,
+            orderUrl: order.url,
+            accountKeyPem: accountKey.toString(),
+            csrKeyPem: csrKey.toString(),
+            csrDer: csr.toString("base64"),
+            createdAt: new Date(),
+          },
+        });
+      }
 
       return NextResponse.json({
         success: true,
-        message: "Challenge created. Ask the customer to ensure bridge.php is uploaded, then trigger finalize.",
+        message: `Challenge created for ${apexDomain} and ${wwwDomain}. Bridge.php will serve both tokens automatically. Click Renew again to finalize.`,
         phase: "challenge_created",
-        token: challenge.token,
-        bridgeUrl: `http://${domain.domainName}/.well-known/acme-challenge/${challenge.token}`,
       });
     }
 
-    // ── Phase 2: Finalize existing challenge ──
-    const { ok: bridgeOk, url: verifyUrl } = await checkBridge(
-      domain.domainName,
-      existingChallenge.token,
-      existingChallenge.keyAuthorization
-    );
-
-    if (!bridgeOk) {
-      return NextResponse.json({
-        success: false,
-        message: "Bridge is not reachable. The customer must upload bridge.php before renewal can proceed.",
-        phase: "bridge_not_ready",
-        bridgeUrl: verifyUrl,
-      }, { status: 422 });
+    // ── Phase 2: Verify bridge for all challenges and finalize ─────────────
+    for (const ch of existingChallenges) {
+      const { ok, url } = await checkBridge(ch.domain, ch.token, ch.keyAuthorization);
+      if (!ok) {
+        return NextResponse.json({
+          success: false,
+          message: `Bridge is not reachable for ${ch.domain}. Make sure bridge.php is uploaded and the .htaccess is correct.`,
+          phase: "bridge_not_ready",
+          bridgeUrl: url,
+        }, { status: 422 });
+      }
     }
 
-    // Bridge OK — finalize with Let's Encrypt
+    // All bridges OK — finalize with Let's Encrypt
+    const { accountKeyPem, csrKeyPem, csrDer, orderUrl } = existingChallenges[0];
+
     const client = new acme.Client({
       directoryUrl: ACME_DIRECTORY_URL,
-      accountKey: existingChallenge.accountKeyPem,
+      accountKey: accountKeyPem,
       backoffAttempts: 5,
       backoffMin: 2000,
       backoffMax: 8000,
@@ -265,8 +268,23 @@ export async function POST(request: NextRequest) {
       contact: [`mailto:${user.email}`],
     });
 
-    const order = await client.getOrder({ url: existingChallenge.orderUrl } as acme.Order);
-    const authorizations = await client.getAuthorizations(order);
+    // Detect stale order
+    let order: acme.Order;
+    let authorizations: acme.Authorization[];
+    try {
+      order = await client.getOrder({ url: orderUrl } as acme.Order);
+      authorizations = await client.getAuthorizations(order);
+    } catch {
+      // Stale — delete all challenges so next click starts fresh
+      for (const ch of existingChallenges) {
+        await db.delete(acmeChallenges).where(eq(acmeChallenges.id, ch.id));
+      }
+      return NextResponse.json({
+        success: false,
+        phase: "order_expired",
+        message: "The ACME order expired. Click Renew again to start a fresh attempt.",
+      }, { status: 422 });
+    }
 
     for (const authz of authorizations) {
       const ch = authz.challenges.find((c: any) => c.type === "http-01");
@@ -275,7 +293,7 @@ export async function POST(request: NextRequest) {
       await client.waitForValidStatus(ch);
     }
 
-    const csrBuffer = Buffer.from(existingChallenge.csrDer, "base64");
+    const csrBuffer = Buffer.from(csrDer, "base64");
     await client.finalizeOrder(order, csrBuffer);
     const certChain = await client.getCertificate(order);
 
@@ -286,7 +304,7 @@ export async function POST(request: NextRequest) {
     await db.insert(certificates).values({
       domainId: domain.id,
       crtBody: certificate,
-      keyBodyEncrypted: encrypt(existingChallenge.csrKeyPem),
+      keyBodyEncrypted: encrypt(csrKeyPem),
       caBundle: caCertificate || null,
       expiryDate,
     });
@@ -295,22 +313,24 @@ export async function POST(request: NextRequest) {
       .set({ nextRenewalDate: expiryDate, updatedAt: new Date() })
       .where(eq(domains.id, domain.id));
 
-    await db.delete(acmeChallenges).where(eq(acmeChallenges.id, existingChallenge.id));
+    // Clean up all challenge rows
+    for (const ch of existingChallenges) {
+      await db.delete(acmeChallenges).where(eq(acmeChallenges.id, ch.id));
+    }
 
-    // Email customer
     const zip = new JSZip();
-    zip.file(`${domain.domainName}.crt`, certificate);
-    zip.file(`${domain.domainName}.key`, existingChallenge.csrKeyPem);
-    if (caCertificate) zip.file(`${domain.domainName}-ca-bundle.crt`, caCertificate);
-    zip.file("README.txt", `Renewed SSL Certificate\nDomain: ${domain.domainName}\nExpires: ${expiryDate.toLocaleDateString()}\n`);
+    zip.file(`${apexDomain}.crt`, certificate);
+    zip.file(`${apexDomain}.key`, csrKeyPem);
+    if (caCertificate) zip.file(`${apexDomain}-ca-bundle.crt`, caCertificate);
+    zip.file("README.txt", `Renewed SSL Certificate\nDomain: ${apexDomain} + ${wwwDomain}\nExpires: ${expiryDate.toLocaleDateString()}\n`);
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
-    await sendCertificateEmail(user.email, domain.domainName, zipBuffer);
-    await sendAdminRenewalSuccess(user.email, domain.domainName, expiryDate);
+    await sendCertificateEmail(user.email, apexDomain, zipBuffer);
+    await sendAdminRenewalSuccess(user.email, apexDomain, expiryDate);
 
     return NextResponse.json({
       success: true,
-      message: `${domain.domainName} renewed successfully. New cert emailed to ${user.email}.`,
+      message: `${apexDomain} and ${wwwDomain} renewed successfully. Certificate emailed to ${user.email}.`,
       phase: "renewed",
       expiryDate,
     });
@@ -331,7 +351,6 @@ export async function DELETE(request: NextRequest) {
     const { domainId } = await request.json();
     if (!domainId) return NextResponse.json({ error: "domainId required" }, { status: 400 });
 
-    // Confirm domain exists before deleting
     const [row] = await db
       .select({ domain: domains })
       .from(domains)
@@ -341,12 +360,7 @@ export async function DELETE(request: NextRequest) {
     if (!row) return NextResponse.json({ error: "Domain not found" }, { status: 404 });
 
     const domainName = row.domain.domainName;
-
-    // Schema has cascade delete on certificates and acmeChallenges (onDelete: "cascade")
-    // so deleting the domain row cleans everything up automatically
     await db.delete(domains).where(eq(domains.id, domainId));
-
-    console.log(`[admin/domains] Deleted domain ${domainName} (id: ${domainId})`);
 
     return NextResponse.json({
       success: true,
