@@ -9,6 +9,8 @@ import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import * as https from "https";
+import * as http from "http";
 import * as acme from "acme-client";
 import JSZip from "jszip";
 import { encrypt } from "@/lib/crypto";
@@ -31,6 +33,38 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
     certificate: blocks[0] as string,
     caCertificate: blocks.slice(1).join("\n"),
   };
+}
+
+
+// Check bridge by trying https (ignoring expired cert) then falling back to http
+async function checkBridge(domain: string, token: string, keyAuthorization: string): Promise<{ ok: boolean; url: string }> {
+  function tryUrl(url: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const isHttps = url.startsWith("https");
+      const requester = isHttps ? https : http;
+      const options: any = {
+        timeout: 5000,
+        headers: { "User-Agent": "EasySSL-Admin/1.0" },
+      };
+      if (isHttps) options.rejectUnauthorized = false;
+
+      const req = (requester as any).get(url, options, (res: any) => {
+        let data = "";
+        res.on("data", (chunk: any) => (data += chunk));
+        res.on("end", () => resolve(data.trim() === keyAuthorization.trim()));
+      });
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => { req.destroy(); resolve(false); });
+    });
+  }
+
+  const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
+  if (await tryUrl(httpsUrl)) return { ok: true, url: httpsUrl };
+
+  const httpUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
+  if (await tryUrl(httpUrl)) return { ok: true, url: httpUrl };
+
+  return { ok: false, url: httpsUrl };
 }
 
 // ── GET: All domains with owner + latest cert info ────────────────────────────
@@ -194,18 +228,11 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Phase 2: Finalize existing challenge ──
-    const verifyUrl = `http://${domain.domainName}/.well-known/acme-challenge/${existingChallenge.token}`;
-    let bridgeOk = false;
-    try {
-      const res = await fetch(verifyUrl, {
-        signal: AbortSignal.timeout(5000),
-        headers: { "User-Agent": "EasySSL-Admin/1.0" },
-      });
-      const content = await res.text();
-      bridgeOk = res.ok && content.trim() === existingChallenge.keyAuthorization.trim();
-    } catch {
-      bridgeOk = false;
-    }
+    const { ok: bridgeOk, url: verifyUrl } = await checkBridge(
+      domain.domainName,
+      existingChallenge.token,
+      existingChallenge.keyAuthorization
+    );
 
     if (!bridgeOk) {
       return NextResponse.json({
