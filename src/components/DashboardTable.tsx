@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Clock, Download, FileText, Key, Shield, Trash2, Wifi } from "lucide-react";
+import { Clock, Download, FileText, Key, Shield, Trash2, Wifi, RefreshCw } from "lucide-react";
 import { differenceInDays, format } from "date-fns";
 
 type Domain = {
@@ -48,6 +48,13 @@ export default function DashboardTable({
     summary: string;
     checks: Array<{ label: string; status: "pass" | "fail" | "warn"; message: string }>;
   } | null>(null);
+  const [renewingDomain, setRenewingDomain] = useState<string | null>(null);
+  const [renewResult, setRenewResult] = useState<{
+    domainName: string;
+    success: boolean;
+    message: string;
+    phase?: string;
+  } | null>(null);
 
   const isBridgeTier = userTier === "pro" || userTier === "lifetime";
 
@@ -62,6 +69,32 @@ export default function DashboardTable({
       alert(err.message || "Failed to check bridge setup");
     } finally {
       setCheckingBridge(null);
+    }
+  }
+
+  async function renewCertificate(domainId: string, domainName: string) {
+    setRenewingDomain(domainId);
+    try {
+      const res = await fetch(`/api/ssl/renew`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domainId }),
+      });
+      const data = await res.json();
+      setRenewResult({
+        domainName,
+        success: data.success,
+        message: data.message || data.error || "Unknown error",
+        phase: data.phase,
+      });
+    } catch (err: any) {
+      setRenewResult({
+        domainName,
+        success: false,
+        message: err.message || "Renewal request failed",
+      });
+    } finally {
+      setRenewingDomain(null);
     }
   }
 
@@ -124,11 +157,9 @@ export default function DashboardTable({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      // For .htaccess, some browsers strip the dot — server header handles it
       a.setAttribute("download", filename);
       a.click();
       URL.revokeObjectURL(url);
-      // Show instructions after download
       setShowBridgeInstructions(domainName);
     } catch (err: any) {
       alert(err.message || "Failed to download bridge file");
@@ -156,6 +187,7 @@ export default function DashboardTable({
                 ? differenceInDays(new Date(certificate.expiryDate), new Date())
                 : 0;
               const isExpiring = daysRemaining < 30;
+              const isExpiredOrSoon = certificate && daysRemaining <= 14;
               const hasIncompleteChallenge = !certificate && domain.challengeToken;
               const showBridge = isBridgeTier && domain.autoRenewEnabled && certificate;
 
@@ -293,6 +325,20 @@ export default function DashboardTable({
                             </button>
                           </div>
                         )}
+
+                        {/* Renew Certificate — shown when expired or expiring within 14 days */}
+                        {isExpiredOrSoon && isBridgeTier && domain.autoRenewEnabled && (
+                          <div className="mt-2 pt-2 border-t border-gray-100">
+                            <button
+                              onClick={() => renewCertificate(domain.id, domain.domainName)}
+                              disabled={renewingDomain === domain.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-700 disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${renewingDomain === domain.id ? "animate-spin" : ""}`} />
+                              {renewingDomain === domain.id ? "Renewing..." : "Renew Certificate"}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ) : hasIncompleteChallenge ? (
                       <div className="flex flex-col gap-1">
@@ -322,6 +368,52 @@ export default function DashboardTable({
         </table>
       </div>
 
+      {/* Renew Result Modal */}
+      {renewResult && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">
+                Certificate Renewal — {renewResult.domainName}
+              </h3>
+              <button onClick={() => setRenewResult(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <div className="p-6">
+              <div className={`p-4 rounded-lg border ${
+                renewResult.success
+                  ? "bg-green-50 border-green-200"
+                  : "bg-red-50 border-red-200"
+              }`}>
+                <p className={`text-sm font-semibold mb-1 ${renewResult.success ? "text-green-800" : "text-red-800"}`}>
+                  {renewResult.success ? "✅" : "❌"} {renewResult.success ? "Success" : "Failed"}
+                </p>
+                <p className={`text-sm ${renewResult.success ? "text-green-700" : "text-red-700"}`}>
+                  {renewResult.message}
+                </p>
+                {renewResult.phase === "challenge_created" && (
+                  <p className="text-xs text-green-600 mt-2">
+                    ⏳ Step 1 done. Make sure bridge.php is uploaded and reachable, then click Renew again to finalize.
+                  </p>
+                )}
+                {renewResult.phase === "renewed" && (
+                  <p className="text-xs text-green-600 mt-2">
+                    📧 New certificate emailed to you. Download and install it on your server.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="p-6 border-t">
+              <button
+                onClick={() => setRenewResult(null)}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bridge Check Result Modal */}
       {bridgeCheckResult && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
@@ -333,7 +425,6 @@ export default function DashboardTable({
               <button onClick={() => setBridgeCheckResult(null)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
             <div className="p-6 space-y-3">
-              {/* Summary banner */}
               <div className={`p-4 rounded-lg border ${
                 bridgeCheckResult.allPassed
                   ? "bg-green-50 border-green-200"
@@ -350,8 +441,6 @@ export default function DashboardTable({
                   {bridgeCheckResult.summary}
                 </p>
               </div>
-
-              {/* Individual checks */}
               <div className="space-y-2">
                 {bridgeCheckResult.checks.map((check, i) => (
                   <div key={i} className={`flex items-start gap-3 p-3 rounded-lg border ${
@@ -394,7 +483,6 @@ export default function DashboardTable({
               <p className="text-sm text-gray-600">
                 Upload both files to your hosting server for <strong>{showBridgeInstructions}</strong> to enable automatic SSL renewal.
               </p>
-
               <div className="space-y-3">
                 <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
                   <p className="text-sm font-semibold text-blue-800 mb-1">📄 bridge.php</p>
@@ -403,7 +491,6 @@ export default function DashboardTable({
                     public_html/.well-known/acme-challenge/bridge.php
                   </code>
                 </div>
-
                 <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
                   <p className="text-sm font-semibold text-purple-800 mb-1">⚙️ .htaccess</p>
                   <p className="text-xs text-purple-700 mb-2">Upload to:</p>
@@ -413,7 +500,6 @@ export default function DashboardTable({
                   <p className="text-xs text-purple-600 mt-2">⚠️ Note: The filename starts with a dot. Make sure your FTP client shows hidden files.</p>
                 </div>
               </div>
-
               <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                 <p className="text-sm font-semibold text-green-800 mb-1">✅ How to enable hidden files in cPanel File Manager</p>
                 <ol className="text-xs text-green-700 space-y-1 list-decimal list-inside">
@@ -423,12 +509,11 @@ export default function DashboardTable({
                   <li>Click Save</li>
                 </ol>
               </div>
-
               <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                 <p className="text-sm font-semibold text-yellow-800 mb-1">🔒 Important</p>
                 <p className="text-xs text-yellow-700">
-                  Keep <strong>bridge.php</strong> private — it contains your unique bridge secret. 
-                  Once uploaded, your certificate will renew automatically every 90 days. 
+                  Keep <strong>bridge.php</strong> private — it contains your unique bridge secret.
+                  Once uploaded, your certificate will renew automatically every 90 days.
                   You will receive an email with the new certificate files when renewal completes.
                 </p>
               </div>
