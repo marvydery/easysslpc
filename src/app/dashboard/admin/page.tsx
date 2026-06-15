@@ -171,6 +171,27 @@ export default function AdminDashboard() {
     }
   }
 
+  // ── Domain delete ─────────────────────────────────────────────────────────
+  async function deleteDomain(domainId: string, domainName: string) {
+    if (!confirm(`Delete ${domainName} and ALL its certificates? This cannot be undone.`)) return;
+    setActionLoading(`delete-${domainId}`);
+    try {
+      const res = await fetch("/api/admin/domains", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domainId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showToast(data.message, "success");
+      setAllDomains((prev) => prev.filter((d) => d.id !== domainId));
+    } catch (err: any) {
+      showToast(err.message || "Delete failed", "error");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   // ── Domain renewal ────────────────────────────────────────────────────────
   async function triggerRenewal(domainId: string, domainName: string) {
     setActionLoading(`renew-${domainId}`);
@@ -534,15 +555,25 @@ export default function AdminDashboard() {
                           {new Date(domain.createdAt).toLocaleDateString()}
                         </td>
                         <td className="px-4 py-3">
-                          <button
-                            onClick={() => triggerRenewal(domain.id, domain.domainName)}
-                            disabled={actionLoading === `renew-${domain.id}`}
-                            title="Trigger manual renewal"
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 ${actionLoading === `renew-${domain.id}` ? "animate-spin" : ""}`} />
-                            {actionLoading === `renew-${domain.id}` ? "Working..." : "Renew"}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => triggerRenewal(domain.id, domain.domainName)}
+                              disabled={!!actionLoading}
+                              title="Trigger manual renewal"
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${actionLoading === `renew-${domain.id}` ? "animate-spin" : ""}`} />
+                              {actionLoading === `renew-${domain.id}` ? "Working..." : "Renew"}
+                            </button>
+                            <button
+                              onClick={() => deleteDomain(domain.id, domain.domainName)}
+                              disabled={!!actionLoading}
+                              title="Delete domain"
+                              className="p-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
