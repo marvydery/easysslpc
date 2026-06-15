@@ -11,6 +11,8 @@ import {
   sendAdminRenewalSuccess,
   sendAdminRenewalFailure,
 } from "@/lib/email";
+import * as https from "https";
+import * as http from "http";
 
 const ACME_DIRECTORY_URL =
   process.env.ACME_DIRECTORY_URL ||
@@ -24,6 +26,40 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
     certificate: blocks[0] as string,
     caCertificate: blocks.slice(1).join("\n"),
   };
+}
+
+/**
+ * Checks bridge by trying https (ignoring expired cert) then falling back to http.
+ * This handles sites that force HTTP→HTTPS redirect even with an expired cert.
+ */
+async function checkBridge(domain: string, token: string, keyAuthorization: string): Promise<{ ok: boolean; url: string }> {
+  function tryUrl(url: string, ignoreSSL = false): Promise<boolean> {
+    return new Promise((resolve) => {
+      const isHttps = url.startsWith("https");
+      const requester = isHttps ? https : http;
+      const options: any = {
+        timeout: 5000,
+        headers: { "User-Agent": "EasySSL-Cron/1.0" },
+      };
+      if (isHttps) options.rejectUnauthorized = false; // allow expired certs
+
+      const req = (requester as any).get(url, options, (res: any) => {
+        let data = "";
+        res.on("data", (chunk: any) => (data += chunk));
+        res.on("end", () => resolve(data.trim() === keyAuthorization.trim()));
+      });
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => { req.destroy(); resolve(false); });
+    });
+  }
+
+  const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
+  if (await tryUrl(httpsUrl)) return { ok: true, url: httpsUrl };
+
+  const httpUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
+  if (await tryUrl(httpUrl)) return { ok: true, url: httpUrl };
+
+  return { ok: false, url: httpsUrl };
 }
 
 /**
@@ -49,7 +85,6 @@ export async function GET(request: NextRequest) {
     const today = new Date();
     const results: any[] = [];
 
-    // Fetch all pending challenges joined correctly to their domain AND user
     const pendingChallenges = await db
       .select({ challenge: acmeChallenges, domain: domains, user: users })
       .from(acmeChallenges)
@@ -64,7 +99,6 @@ export async function GET(request: NextRequest) {
       .where(eq(domains.autoRenewEnabled, true));
 
     for (const { challenge, domain, user } of pendingChallenges) {
-      // Only finalize challenges that are at least 5 minutes old
       const challengeAgeMinutes =
         (today.getTime() - new Date(challenge.createdAt).getTime()) / 1000 / 60;
       if (challengeAgeMinutes < 5) {
@@ -75,19 +109,11 @@ export async function GET(request: NextRequest) {
       try {
         console.log(`[cron/finalize] Finalizing renewal for ${domain.domainName}`);
 
-        // Verify bridge.php is serving the challenge token BEFORE contacting Let's Encrypt
-        const verifyUrl = `http://${challenge.domain}/.well-known/acme-challenge/${challenge.token}`;
-        let bridgeOk = false;
-        try {
-          const res = await fetch(verifyUrl, {
-            signal: AbortSignal.timeout(5000),
-            headers: { "User-Agent": "EasySSL-Cron/1.0" },
-          });
-          const content = await res.text();
-          bridgeOk = res.ok && content.trim() === challenge.keyAuthorization.trim();
-        } catch {
-          bridgeOk = false;
-        }
+        const { ok: bridgeOk, url: verifyUrl } = await checkBridge(
+          challenge.domain,
+          challenge.token,
+          challenge.keyAuthorization
+        );
 
         if (!bridgeOk) {
           const daysUntilExpiry = domain.nextRenewalDate
@@ -101,7 +127,6 @@ export async function GET(request: NextRequest) {
             `[cron/finalize] Bridge not ready for ${domain.domainName} (${daysUntilExpiry}d left)`
           );
 
-          // Notify customer + admin when expiry is ≤ 5 days away
           if (daysUntilExpiry !== null && daysUntilExpiry <= 5) {
             await sendBridgeFailureWarning(
               user.email,
@@ -115,7 +140,6 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // Bridge is good — proceed with Let's Encrypt validation
         const client = new acme.Client({
           directoryUrl: ACME_DIRECTORY_URL,
           accountKey: challenge.accountKeyPem,
@@ -147,7 +171,6 @@ export async function GET(request: NextRequest) {
         const expiryDate = new Date();
         expiryDate.setDate(expiryDate.getDate() + 90);
 
-        // Save new certificate to DB
         await db.insert(certificates).values({
           domainId: domain.id,
           crtBody: certificate,
@@ -156,16 +179,13 @@ export async function GET(request: NextRequest) {
           expiryDate,
         });
 
-        // Update domain's next renewal date
         await db
           .update(domains)
           .set({ nextRenewalDate: expiryDate, updatedAt: new Date() })
           .where(eq(domains.id, domain.id));
 
-        // Clean up the challenge row
         await db.delete(acmeChallenges).where(eq(acmeChallenges.id, challenge.id));
 
-        // Build ZIP for customer
         const zip = new JSZip();
         zip.file(`${domain.domainName}.crt`, certificate);
         zip.file(`${domain.domainName}.key`, challenge.csrKeyPem);
@@ -176,20 +196,14 @@ export async function GET(request: NextRequest) {
         );
         const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
-        // Notify customer with new cert
         await sendCertificateEmail(user.email, domain.domainName, zipBuffer);
-
-        // Notify admin of success
         await sendAdminRenewalSuccess(user.email, domain.domainName, expiryDate);
 
         results.push({ domain: domain.domainName, status: "renewed", expiryDate });
         console.log(`[cron/finalize] Successfully renewed ${domain.domainName}`);
       } catch (err: any) {
         console.error(`[cron/finalize] Failed for ${domain.domainName}:`, err);
-
-        // Notify admin of failure with error details
         await sendAdminRenewalFailure(user.email, domain.domainName, err.message);
-
         results.push({ domain: domain.domainName, status: "failed", error: err.message });
       }
     }
