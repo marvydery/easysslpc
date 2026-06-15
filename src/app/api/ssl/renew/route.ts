@@ -100,8 +100,19 @@ export async function POST(request: NextRequest) {
       .where(and(eq(acmeChallenges.userId, dbUser.id), eq(acmeChallenges.domain, domain.domainName)))
       .limit(1);
 
-    // ── Phase 1: Create challenge ──────────────────────────────────────────
-    if (!existingChallenge) {
+    // ── Phase 1: Create challenges for apex + www ─────────────────────────
+    const apexDomain = domain.domainName.startsWith("www.")
+      ? domain.domainName.slice(4)
+      : domain.domainName;
+    const wwwDomain = `www.${apexDomain}`;
+
+    // Check for any existing challenges
+    const allChallenges = await db.select().from(acmeChallenges).where(eq(acmeChallenges.userId, dbUser.id));
+    const existingChallenges = allChallenges.filter(
+      (c) => c.domain === apexDomain || c.domain === wwwDomain
+    );
+
+    if (existingChallenges.length === 0) {
       const accountKey = await acme.crypto.createPrivateKey();
       const client = new acme.Client({ directoryUrl: ACME_DIRECTORY_URL, accountKey });
 
@@ -110,54 +121,68 @@ export async function POST(request: NextRequest) {
         contact: [`mailto:${dbUser.email}`],
       });
 
-      const [csrKey, csr] = await acme.crypto.createCsr({ commonName: domain.domainName });
+      const [csrKey, csr] = await acme.crypto.createCsr({
+        commonName: apexDomain,
+        altNames: [apexDomain, wwwDomain],
+      });
 
       const order = await client.createOrder({
-        identifiers: [{ type: "dns", value: domain.domainName }],
+        identifiers: [
+          { type: "dns", value: apexDomain },
+          { type: "dns", value: wwwDomain },
+        ],
       });
 
       const authorizations = await client.getAuthorizations(order);
-      const authz = authorizations[0];
-      const challenge = authz.challenges.find((c: any) => c.type === "http-01");
-      if (!challenge) throw new Error("No HTTP-01 challenge found");
 
-      const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
+      for (const authz of authorizations) {
+        const ch = authz.challenges.find((c: any) => c.type === "http-01");
+        if (!ch) throw new Error(`No HTTP-01 challenge for ${authz.identifier.value}`);
+        const kAuth = await client.getChallengeKeyAuthorization(ch);
 
-      await db.insert(acmeChallenges).values({
-        userId: dbUser.id,
-        domain: domain.domainName,
-        token: challenge.token,
-        keyAuthorization,
-        orderUrl: order.url,
-        accountKeyPem: accountKey.toString(),
-        csrKeyPem: csrKey.toString(),
-        csrDer: csr.toString("base64"),
-      }).onConflictDoUpdate({
-        target: [acmeChallenges.userId, acmeChallenges.domain],
-        set: {
-          token: challenge.token,
-          keyAuthorization,
+        await db.insert(acmeChallenges).values({
+          userId: dbUser.id,
+          domain: authz.identifier.value,
+          token: ch.token,
+          keyAuthorization: kAuth,
           orderUrl: order.url,
           accountKeyPem: accountKey.toString(),
           csrKeyPem: csrKey.toString(),
           csrDer: csr.toString("base64"),
-          createdAt: new Date(),
-        },
-      });
+        }).onConflictDoUpdate({
+          target: [acmeChallenges.userId, acmeChallenges.domain],
+          set: {
+            token: ch.token,
+            keyAuthorization: kAuth,
+            orderUrl: order.url,
+            accountKeyPem: accountKey.toString(),
+            csrKeyPem: csrKey.toString(),
+            csrDer: csr.toString("base64"),
+            createdAt: new Date(),
+          },
+        });
+      }
 
       return NextResponse.json({
         success: true,
         phase: "challenge_created",
-        message: "Challenge created. Make sure bridge.php is uploaded and reachable, then click Renew again to complete.",
+        message: `Challenge created for ${apexDomain} and ${wwwDomain}. Bridge.php will serve both tokens automatically. Click Renew again to complete.`,
       });
     }
 
-    // ── Phase 2: Verify bridge and finalize ────────────────────────────────
-    const { ok: bridgeOk, url: verifyUrl } = await checkBridge(
-      domain.domainName,
-      existingChallenge.token,
-      existingChallenge.keyAuthorization
-    );
+    // ── Phase 2: Verify bridge for all challenges and finalize ───────────
+    for (const ch of existingChallenges) {
+      const { ok, url } = await checkBridge(ch.domain, ch.token, ch.keyAuthorization);
+      if (!ok) {
+        return NextResponse.json({
+          success: false,
+          phase: "bridge_not_ready",
+          message: `Bridge is not reachable for ${ch.domain} at ${url}. Make sure bridge.php is correctly uploaded and try again.`,
+        }, { status: 422 });
+      }
+    }
+    const bridgeOk = true;
+    const verifyUrl = "";
 
     if (!bridgeOk) {
       return NextResponse.json({
