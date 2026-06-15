@@ -58,13 +58,21 @@ async function checkBridge(domain: string, token: string, keyAuthorization: stri
     });
   }
 
+  // Try bridge.php directly first (handles sites with HTTP→HTTPS redirects)
+  const bridgeHttps = `https://${domain}/.well-known/acme-challenge/bridge.php?token=${token}`;
+  if (await tryUrl(bridgeHttps)) return { ok: true, url: bridgeHttps };
+
+  const bridgeHttp = `http://${domain}/.well-known/acme-challenge/bridge.php?token=${token}`;
+  if (await tryUrl(bridgeHttp)) return { ok: true, url: bridgeHttp };
+
+  // Fall back to direct token URL (for non-bridge setups)
   const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
   if (await tryUrl(httpsUrl)) return { ok: true, url: httpsUrl };
 
   const httpUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
   if (await tryUrl(httpUrl)) return { ok: true, url: httpUrl };
 
-  return { ok: false, url: httpsUrl };
+  return { ok: false, url: bridgeHttps };
 }
 
 // ── GET: All domains with owner + latest cert info ────────────────────────────
