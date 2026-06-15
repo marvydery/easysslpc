@@ -5,12 +5,11 @@ import { encrypt } from "@/lib/crypto";
 import { eq, and } from "drizzle-orm";
 import * as acme from "acme-client";
 import JSZip from "jszip";
+import { sendCertificateEmail, sendBridgeFailureWarning } from "@/lib/email";
 
 const ACME_DIRECTORY_URL =
   process.env.ACME_DIRECTORY_URL ||
   "https://acme-v02.api.letsencrypt.org/directory";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "";
 
 function parseCertChain(chain: string): { certificate: string; caCertificate: string } {
   const blocks =
@@ -29,7 +28,7 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
  * Verifies bridge.php is serving the token, then completes Let's Encrypt
  * validation and issues the new certificate.
  *
- * Run daily at 3:00 AM UTC (1 hour after challenge cron).
+ * Run daily at 3:00 AM UTC (1 hour after challenge cron at 2:00 AM).
  */
 export async function GET(request: NextRequest) {
   try {
@@ -41,8 +40,7 @@ export async function GET(request: NextRequest) {
     const today = new Date();
     const results: any[] = [];
 
-    // Fetch all pending challenges joined to their domain AND user
-    // FIX: Join on domain name (not just userId) to prevent cross-domain mismatch
+    // Fetch all pending challenges joined correctly to their specific domain AND user
     const pendingChallenges = await db
       .select({ challenge: acmeChallenges, domain: domains, user: users })
       .from(acmeChallenges)
@@ -50,7 +48,7 @@ export async function GET(request: NextRequest) {
         domains,
         and(
           eq(acmeChallenges.userId, domains.userId),
-          eq(acmeChallenges.domain, domains.domainName) // <-- critical fix
+          eq(acmeChallenges.domain, domains.domainName) // match on name, not just userId
         )
       )
       .innerJoin(users, eq(domains.userId, users.id))
@@ -68,7 +66,7 @@ export async function GET(request: NextRequest) {
       try {
         console.log(`[cron/finalize] Finalizing renewal for ${domain.domainName}`);
 
-        // Verify bridge.php is serving the challenge token correctly BEFORE contacting LE
+        // Verify bridge.php is serving the challenge token BEFORE contacting Let's Encrypt
         const verifyUrl = `http://${challenge.domain}/.well-known/acme-challenge/${challenge.token}`;
         let bridgeOk = false;
         try {
@@ -85,24 +83,25 @@ export async function GET(request: NextRequest) {
         if (!bridgeOk) {
           console.warn(`[cron/finalize] Bridge not ready for ${domain.domainName}, will retry tomorrow`);
 
-          // If expiry is within 5 days and bridge is still broken, send warning email
+          // Calculate days until expiry so we know how urgent this is
           const daysUntilExpiry = domain.nextRenewalDate
-            ? (new Date(domain.nextRenewalDate).getTime() - today.getTime()) / 1000 / 60 / 60 / 24
+            ? Math.round(
+                (new Date(domain.nextRenewalDate).getTime() - today.getTime()) /
+                  1000 / 60 / 60 / 24
+              )
             : null;
 
+          // Send urgent warning email when expiry is 5 days or fewer away
           if (daysUntilExpiry !== null && daysUntilExpiry <= 5) {
-            console.error(`[cron/finalize] CRITICAL: ${domain.domainName} expires in ${Math.round(daysUntilExpiry)} days and bridge is unreachable`);
-            // Send urgent warning email to user
-            await fetch(`${APP_URL}/api/email/renewal-warning`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                email: user.email,
-                domainName: domain.domainName,
-                daysUntilExpiry: Math.round(daysUntilExpiry),
-                bridgeUrl: verifyUrl,
-              }),
-            }).catch((e) => console.error("Warning email failed:", e));
+            console.error(
+              `[cron/finalize] CRITICAL: ${domain.domainName} expires in ${daysUntilExpiry} days and bridge is unreachable`
+            );
+            await sendBridgeFailureWarning(
+              user.email,
+              domain.domainName,
+              daysUntilExpiry,
+              verifyUrl
+            );
           }
 
           results.push({ domain: domain.domainName, status: "bridge_not_ready", daysUntilExpiry });
@@ -141,7 +140,7 @@ export async function GET(request: NextRequest) {
         const expiryDate = new Date();
         expiryDate.setDate(expiryDate.getDate() + 90);
 
-        // Save new certificate
+        // Save new certificate to DB
         await db.insert(certificates).values({
           domainId: domain.id,
           crtBody: certificate,
@@ -150,7 +149,7 @@ export async function GET(request: NextRequest) {
           expiryDate,
         });
 
-        // Update domain renewal date
+        // Update domain's next renewal date
         await db
           .update(domains)
           .set({ nextRenewalDate: expiryDate, updatedAt: new Date() })
@@ -159,7 +158,7 @@ export async function GET(request: NextRequest) {
         // Clean up the challenge row
         await db.delete(acmeChallenges).where(eq(acmeChallenges.id, challenge.id));
 
-        // Build ZIP and email to user
+        // Build ZIP and email it to the user
         const zip = new JSZip();
         zip.file(`${domain.domainName}.crt`, certificate);
         zip.file(`${domain.domainName}.key`, challenge.csrKeyPem);
@@ -170,17 +169,7 @@ export async function GET(request: NextRequest) {
         );
         const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
-        await fetch(`${APP_URL}/api/email/certificate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: user.email,
-            domainName: domain.domainName,
-            expiryDate: expiryDate.toLocaleDateString(),
-            certificateZip: zipBuffer.toString("base64"),
-            isRenewal: true,
-          }),
-        });
+        await sendCertificateEmail(user.email, domain.domainName, zipBuffer);
 
         results.push({ domain: domain.domainName, status: "renewed", expiryDate });
         console.log(`[cron/finalize] Successfully renewed ${domain.domainName}`);
