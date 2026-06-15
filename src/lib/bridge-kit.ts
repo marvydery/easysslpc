@@ -3,61 +3,58 @@
  */
 
 export function generateBridgePHP(domain: string, bridgeSecret: string, apiUrl: string): string {
+  // Strip trailing slash to prevent double-slash in the API URL
+  const baseUrl = apiUrl.replace(/\/+$/, '');
+
   return `<?php
 /**
- * EasySSL Bridge File
- * This file enables automatic SSL certificate renewal
- * Domain: ${domain}
- * DO NOT DELETE THIS FILE
+ * EasySSL Bridge Protocol
+ * ========================
+ * Domain  : ${domain}
+ * Generated: ${new Date().toLocaleDateString()}
+ *
+ * INSTALLATION:
+ * 1. Upload this file to: public_html/.well-known/acme-challenge/bridge.php
+ * 2. Upload the .htaccess file to: public_html/.well-known/acme-challenge/.htaccess
+ * 3. That's it! Certificate renewals will happen automatically.
+ *
+ * DO NOT share this file — it contains your unique bridge secret.
  */
 
-// Get the token from the URL
-$uri = $_SERVER['REQUEST_URI'];
-$token = basename($uri);
+define('BRIDGE_SECRET', '${bridgeSecret}');
+define('EASYSSL_API',   '${baseUrl}/api/bridge');
 
-// Your domain and bridge secret
-$domain = '${domain}';
-$bridgeSecret = '${bridgeSecret}';
+$token = isset($_GET['token']) ? preg_replace('/[^a-zA-Z0-9_\\-]/', '', $_GET['token']) : '';
 
-// EasySSL API endpoint
-$apiUrl = '${apiUrl}/api/bridge';
-
-// Build the request URL
-$url = $apiUrl . '?' . http_build_query([
-    'domain' => $domain,
-    'token' => $token,
-    'secret' => $bridgeSecret
-]);
-
-// Make the request to EasySSL API
-$ch = curl_init();
-curl_setopt($ch, CURLOPT_URL, $url);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-// Return the response
-if ($httpCode === 200 && $response) {
-    header('Content-Type: text/plain');
-    echo $response;
-} else {
-    header('HTTP/1.1 404 Not Found');
-    echo 'Challenge not found';
+if (empty($token)) {
+    http_response_code(400);
+    exit('Bad Request');
 }
+
+$url = EASYSSL_API . '?' . http_build_query(['token' => $token, 'secret' => BRIDGE_SECRET]);
+$response = @file_get_contents($url, false, stream_context_create([
+    'http' => ['timeout' => 10, 'ignore_errors' => true],
+]));
+
+if ($response === false || empty(trim($response))) {
+    http_response_code(404);
+    exit('Not Found');
+}
+
+header('Content-Type: text/plain');
+header('Cache-Control: no-store');
+echo trim($response);
 ?>`;
 }
 
 export function generateHtaccess(): string {
   return `# EasySSL Bridge Configuration
-# Redirect all ACME challenge requests to bridge.php
+# Serves ACME challenge tokens via bridge.php
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteCond %{REQUEST_URI} ^/.well-known/acme-challenge/
-    RewriteRule ^.well-known/acme-challenge/(.*)$ /bridge.php [L,QSA]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^(.*)$ bridge.php [L,QSA]
 </IfModule>`;
 }
 
@@ -67,34 +64,34 @@ export function generateReadme(domain: string): string {
 ## Installation Instructions
 
 1. **Upload Files**
-   - Upload \`bridge.php\` to your website's root directory
-   - Upload \`.htaccess\` to your website's root directory (or append the rules if .htaccess already exists)
+   - Upload \`bridge.php\` to: public_html/.well-known/acme-challenge/bridge.php
+   - Upload \`.htaccess\` to: public_html/.well-known/acme-challenge/.htaccess
 
 2. **Verify Installation**
-   - Make sure both files are accessible
-   - The bridge.php file should be at: http://${domain}/bridge.php
-   - The .htaccess rewrite rules should work
+   - Visit: http://${domain}/.well-known/acme-challenge/bridge.php
+   - You should NOT see a PHP error — a 400 Bad Request response means it is working correctly
 
 3. **Important Notes**
-   - DO NOT delete these files! They enable automatic SSL renewal
-   - Your SSL certificate will be automatically renewed every 90 days
-   - You'll receive an email with the new certificate each time
+   - DO NOT delete these files — they enable automatic SSL renewal
+   - Your SSL certificate will be automatically renewed before it expires
+   - You will receive an email with the new certificate each time it renews
 
 4. **File Permissions**
-   - bridge.php should be readable (644 or 755)
-   - .htaccess should be readable (644)
+   - bridge.php: 644
+   - .htaccess: 644
 
 ## Troubleshooting
 
 If automatic renewal fails:
-- Check that both files exist and are accessible
-- Verify that mod_rewrite is enabled on your server
-- Check file permissions
+- Confirm both files are in public_html/.well-known/acme-challenge/
+- Verify mod_rewrite is enabled on your server
+- Check file permissions (644)
 - Contact support at support@easyssl.com
 
 ## Security
 
-The bridge.php file contains a unique secret key that authenticates your domain with our servers. Keep this file secure and do not share it publicly.
+bridge.php contains a unique secret key tied to your domain.
+Do not share it or make it publicly accessible outside this directory.
 `;
 }
 
@@ -109,12 +106,10 @@ export async function createBridgeKitZip(
   const JSZip = (await import('jszip')).default;
   const zip = new JSZip();
 
-  // Add files to ZIP
   zip.file('bridge.php', generateBridgePHP(domain, bridgeSecret, apiUrl));
   zip.file('.htaccess', generateHtaccess());
   zip.file('README.txt', generateReadme(domain));
 
-  // Generate ZIP buffer
   const buffer = await zip.generateAsync({ type: 'nodebuffer' });
   return buffer;
 }
