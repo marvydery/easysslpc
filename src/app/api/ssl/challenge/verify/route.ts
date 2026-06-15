@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import * as acme from "acme-client";
+import * as https from "https";
+import * as http from "http";
 import { encrypt } from "@/lib/crypto";
 import JSZip from "jszip";
 
@@ -19,6 +21,38 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
     certificate: blocks[0] as string,
     caCertificate: blocks.slice(1).join("\n"),
   };
+}
+
+// Tries https (ignoring expired cert) then falls back to http
+function fetchToken(domain: string, token: string): Promise<{ ok: boolean; content: string; url: string }> {
+  function tryUrl(url: string): Promise<{ ok: boolean; content: string }> {
+    return new Promise((resolve) => {
+      const isHttps = url.startsWith("https");
+      const requester = isHttps ? https : http;
+      const options: any = { timeout: 8000, headers: { "User-Agent": "EasySSL/1.0" } };
+      if (isHttps) options.rejectUnauthorized = false;
+
+      const req = (requester as any).get(url, options, (res: any) => {
+        let data = "";
+        res.on("data", (c: any) => (data += c));
+        res.on("end", () => resolve({ ok: res.statusCode === 200, content: data }));
+      });
+      req.on("error", () => resolve({ ok: false, content: "" }));
+      req.on("timeout", () => { req.destroy(); resolve({ ok: false, content: "" }); });
+    });
+  }
+
+  return (async () => {
+    const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
+    const httpsResult = await tryUrl(httpsUrl);
+    if (httpsResult.ok) return { ...httpsResult, url: httpsUrl };
+
+    const httpUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
+    const httpResult = await tryUrl(httpUrl);
+    if (httpResult.ok) return { ...httpResult, url: httpUrl };
+
+    return { ok: false, content: "", url: httpsUrl };
+  })();
 }
 
 export async function POST(request: NextRequest) {
@@ -70,28 +104,24 @@ export async function POST(request: NextRequest) {
     const domainList = storedChallenges.map((c) => c.domain);
     const csrBuffer = Buffer.from(csrDer, "base64");
 
-    // Step 1: Verify all uploaded files match stored tokens BEFORE touching LE
+    // Step 1: Verify all uploaded files — tries https (ignoring expired cert) then http
     for (const stored of storedChallenges) {
-      const url = `http://${stored.domain}/.well-known/acme-challenge/${stored.token}`;
-      let fetchRes: Response;
-      try {
-        fetchRes = await fetch(url, { headers: { "User-Agent": "EasySSL/1.0" } });
-      } catch {
+      const { ok, content, url } = await fetchToken(stored.domain, stored.token);
+
+      if (!ok) {
         return NextResponse.json(
-          { error: `Could not reach ${url}. Ensure your server is accessible over plain HTTP.` },
+          {
+            error: `${stored.domain}: Cannot reach ${url}. Make sure your domain points to your server. (fetch failed)`,
+          },
           { status: 400 }
         );
       }
-      if (!fetchRes.ok) {
-        return NextResponse.json(
-          { error: `Verification file not found for ${stored.domain} (HTTP ${fetchRes.status}). Upload the file to public_html/.well-known/acme-challenge/${stored.token}` },
-          { status: 400 }
-        );
-      }
-      const content = await fetchRes.text();
+
       if (content.trim() !== stored.keyAuthorization.trim()) {
         return NextResponse.json(
-          { error: `File content mismatch for ${stored.domain}. Re-download and re-upload the verification file.` },
+          {
+            error: `File content mismatch for ${stored.domain}. Re-download and re-upload the verification file.`,
+          },
           { status: 400 }
         );
       }
@@ -106,7 +136,6 @@ export async function POST(request: NextRequest) {
       backoffMax: 10000,
     });
 
-    // Re-register account (idempotent — returns existing LE account)
     await client.createAccount({
       termsOfServiceAgreed: true,
       contact: [`mailto:${email}`],
@@ -116,7 +145,7 @@ export async function POST(request: NextRequest) {
     const order = await client.getOrder({ url: orderUrl } as acme.Order);
     const authorizations = await client.getAuthorizations(order);
 
-    // Step 4: Complete each challenge — files are already uploaded and verified above
+    // Step 4: Complete each challenge
     for (const authz of authorizations) {
       const challenge = authz.challenges.find((c: any) => c.type === "http-01");
       if (!challenge) {
@@ -157,7 +186,10 @@ export async function POST(request: NextRequest) {
     zip.file(`${apexDomain}.key`, csrKeyPem);
     if (caCertificate) zip.file(`${apexDomain}-ca-bundle.crt`, caCertificate);
     const coveredDomains = domainList.join(", ");
-    zip.file("README.txt", `SSL Certificate for ${apexDomain}\nDomains: ${coveredDomains}\nExpires: ${expiryDate.toLocaleDateString()}\n`);
+    zip.file(
+      "README.txt",
+      `SSL Certificate for ${apexDomain}\nDomains: ${coveredDomains}\nExpires: ${expiryDate.toLocaleDateString()}\n`
+    );
 
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
