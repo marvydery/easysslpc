@@ -172,8 +172,21 @@ export async function POST(request: NextRequest) {
       contact: [`mailto:${dbUser.email}`],
     });
 
-    const order = await client.getOrder({ url: existingChallenge.orderUrl } as acme.Order);
-    const authorizations = await client.getAuthorizations(order);
+    // Try to resume the stored order — if expired/invalid, wipe it and
+    // tell the customer to click Renew once more to start a fresh Phase 1.
+    let order: acme.Order;
+    let authorizations: acme.Authorization[];
+    try {
+      order = await client.getOrder({ url: existingChallenge.orderUrl } as acme.Order);
+      authorizations = await client.getAuthorizations(order);
+    } catch (err: any) {
+      await db.delete(acmeChallenges).where(eq(acmeChallenges.id, existingChallenge.id));
+      return NextResponse.json({
+        success: false,
+        phase: "order_expired",
+        message: "The previous renewal order expired. Click Renew Certificate again — your bridge is working correctly so it will complete on the next try.",
+      }, { status: 422 });
+    }
 
     for (const authz of authorizations) {
       const ch = authz.challenges.find((c: any) => c.type === "http-01");
