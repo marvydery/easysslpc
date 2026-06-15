@@ -6,11 +6,11 @@ import {
   Settings, Users, BarChart3, Key, DollarSign, Globe,
   Shield, Bell, Search, ChevronDown, Trash2, UserX,
   UserCheck, Crown, RefreshCw, LogIn, Save, X, Lock,
-  Eye, EyeOff, AlertTriangle, CheckCircle2
+  Eye, EyeOff, AlertTriangle, CheckCircle2, Globe2,
 } from "lucide-react";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-type Tab = "overview" | "users" | "pricing" | "keys" | "site" | "analytics";
+// ─── Types ────────────────────────────────────────────────────────────────────
+type Tab = "overview" | "users" | "domains" | "pricing" | "keys" | "site" | "analytics";
 
 type Stats = {
   totalUsers: number;
@@ -35,9 +35,27 @@ type AdminUser = {
   createdAt: string;
 };
 
-type Settings = Record<string, string>;
+type AdminDomain = {
+  id: string;
+  domainName: string;
+  autoRenewEnabled: boolean;
+  nextRenewalDate: string | null;
+  bridgeSecret: boolean;
+  createdAt: string;
+  certStatus: "active" | "expired" | "expiring_soon" | "no_cert";
+  expiryDate: string | null;
+  daysLeft: number | null;
+  hasPendingChallenge: boolean;
+  owner: {
+    id: string;
+    email: string;
+    subscriptionTier: string;
+  };
+};
 
-// ─── Toast ───────────────────────────────────────────────────────────────────
+type AdminSettings = Record<string, string>;
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ message, type, onClose }: { message: string; type: "success" | "error"; onClose: () => void }) {
   useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
   return (
@@ -55,17 +73,19 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [stats, setStats] = useState<Stats | null>(null);
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
-  const [settings, setSettings] = useState<Settings>({});
+  const [allDomains, setAllDomains] = useState<AdminDomain[]>([]);
+  const [settings, setSettings] = useState<AdminSettings>({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [domainSearch, setDomainSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
-  const [localSettings, setLocalSettings] = useState<Settings>({});
+  const [localSettings, setLocalSettings] = useState<AdminSettings>({});
 
   const showToast = (message: string, type: "success" | "error") => setToast({ message, type });
 
-  // ── Fetch data ──────────────────────────────────────────────────────────────
+  // ── Fetch data ───────────────────────────────────────────────────────────────
   const fetchStats = useCallback(async () => {
     const res = await fetch("/api/admin/stats");
     const data = await res.json();
@@ -76,6 +96,12 @@ export default function AdminDashboard() {
     const res = await fetch("/api/admin/users");
     const data = await res.json();
     if (data.success) setAllUsers(data.users);
+  }, []);
+
+  const fetchDomains = useCallback(async () => {
+    const res = await fetch("/api/admin/domains");
+    const data = await res.json();
+    if (data.success) setAllDomains(data.domains);
   }, []);
 
   const fetchSettings = useCallback(async () => {
@@ -96,8 +122,12 @@ export default function AdminDashboard() {
     if (activeTab === "users" && allUsers.length === 0) fetchUsers();
   }, [activeTab, allUsers.length, fetchUsers]);
 
-  // ── Save settings ───────────────────────────────────────────────────────────
-  async function saveSettings(subset: Settings) {
+  useEffect(() => {
+    if (activeTab === "domains") fetchDomains();
+  }, [activeTab, fetchDomains]);
+
+  // ── Save settings ─────────────────────────────────────────────────────────
+  async function saveSettings(subset: AdminSettings) {
     setLoading(true);
     try {
       const res = await fetch("/api/admin/settings", {
@@ -116,7 +146,7 @@ export default function AdminDashboard() {
     }
   }
 
-  // ── User actions ─────────────────────────────────────────────────────────────
+  // ── User actions ──────────────────────────────────────────────────────────
   async function userAction(action: string, userId: string, extra?: object) {
     if (action === "delete" && !confirm("Delete this user and all their data? This cannot be undone.")) return;
     setActionLoading(`${action}-${userId}`);
@@ -141,11 +171,37 @@ export default function AdminDashboard() {
     }
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ── Domain renewal ────────────────────────────────────────────────────────
+  async function triggerRenewal(domainId: string, domainName: string) {
+    setActionLoading(`renew-${domainId}`);
+    try {
+      const res = await fetch("/api/admin/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domainId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      showToast(data.message, "success");
+      fetchDomains();
+    } catch (err: any) {
+      showToast(err.message || "Renewal failed", "error");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const filteredUsers = allUsers.filter(
     (u) =>
       u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.subscriptionTier.includes(searchQuery.toLowerCase())
+  );
+
+  const filteredDomains = allDomains.filter(
+    (d) =>
+      d.domainName.toLowerCase().includes(domainSearch.toLowerCase()) ||
+      d.owner.email.toLowerCase().includes(domainSearch.toLowerCase())
   );
 
   const tierBadge = (tier: string, suspended: boolean) => {
@@ -158,9 +214,17 @@ export default function AdminDashboard() {
     return <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${colors[tier]}`}>{tier}</span>;
   };
 
+  const certStatusBadge = (status: AdminDomain["certStatus"], daysLeft: number | null) => {
+    if (status === "active") return <span className="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Active · {daysLeft}d left</span>;
+    if (status === "expiring_soon") return <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-medium">⚠ Expiring · {daysLeft}d left</span>;
+    if (status === "expired") return <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium">Expired</span>;
+    return <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500 font-medium">No cert</span>;
+  };
+
   const tabs: { id: Tab; label: string; icon: any }[] = [
     { id: "overview", label: "Overview", icon: BarChart3 },
     { id: "users", label: "Users", icon: Users },
+    { id: "domains", label: "Domains", icon: Globe2 },
     { id: "pricing", label: "Pricing", icon: DollarSign },
     { id: "keys", label: "API Keys", icon: Key },
     { id: "site", label: "Site", icon: Globe },
@@ -212,7 +276,7 @@ export default function AdminDashboard() {
         {/* Content */}
         <main className="flex-1 p-6 space-y-6">
 
-          {/* ── OVERVIEW ─────────────────────────────────────────────────── */}
+          {/* ── OVERVIEW ──────────────────────────────────────────────────── */}
           {activeTab === "overview" && (
             <div className="space-y-6">
               <h2 className="text-xl font-bold text-gray-900">Overview</h2>
@@ -266,7 +330,7 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ── USERS ────────────────────────────────────────────────────── */}
+          {/* ── USERS ─────────────────────────────────────────────────────── */}
           {activeTab === "users" && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -369,7 +433,142 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ── PRICING ──────────────────────────────────────────────────── */}
+          {/* ── DOMAINS ───────────────────────────────────────────────────── */}
+          {activeTab === "domains" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-900">All Domains</h2>
+                <button onClick={fetchDomains} className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                  <RefreshCw className="w-4 h-4" /> Refresh
+                </button>
+              </div>
+
+              {/* Summary pills */}
+              <div className="flex gap-3 flex-wrap">
+                {[
+                  { label: "Total", count: allDomains.length, color: "bg-gray-100 text-gray-700" },
+                  { label: "Active", count: allDomains.filter(d => d.certStatus === "active").length, color: "bg-green-100 text-green-700" },
+                  { label: "Expiring Soon", count: allDomains.filter(d => d.certStatus === "expiring_soon").length, color: "bg-yellow-100 text-yellow-700" },
+                  { label: "Expired", count: allDomains.filter(d => d.certStatus === "expired").length, color: "bg-red-100 text-red-700" },
+                  { label: "No Cert", count: allDomains.filter(d => d.certStatus === "no_cert").length, color: "bg-gray-100 text-gray-500" },
+                ].map(({ label, count, color }) => (
+                  <span key={label} className={`px-3 py-1.5 rounded-full text-xs font-semibold ${color}`}>
+                    {label}: {count}
+                  </span>
+                ))}
+              </div>
+
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by domain or owner email..."
+                  value={domainSearch}
+                  onChange={(e) => setDomainSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="bg-white rounded-xl border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Domain</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Owner</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cert Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Auto-Renew</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bridge</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Added</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {filteredDomains.map((domain) => (
+                      <tr
+                        key={domain.id}
+                        className={
+                          domain.certStatus === "expired"
+                            ? "bg-red-50"
+                            : domain.certStatus === "expiring_soon"
+                            ? "bg-yellow-50"
+                            : ""
+                        }
+                      >
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-gray-900">{domain.domainName}</div>
+                          {domain.hasPendingChallenge && (
+                            <span className="text-xs text-blue-600 font-medium">⏳ Challenge pending</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-gray-700 truncate max-w-[160px]">{domain.owner.email}</div>
+                          {tierBadge(domain.owner.subscriptionTier, false)}
+                        </td>
+                        <td className="px-4 py-3">
+                          {certStatusBadge(domain.certStatus, domain.daysLeft)}
+                          {domain.expiryDate && (
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              {new Date(domain.expiryDate).toLocaleDateString()}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {domain.autoRenewEnabled ? (
+                            <span className="flex items-center gap-1 text-green-600 text-xs font-medium">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> On
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-gray-400 text-xs">
+                              <X className="w-3.5 h-3.5" /> Off
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {domain.bridgeSecret ? (
+                            <span className="text-xs text-green-600 font-medium">✓ Configured</span>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-400">
+                          {new Date(domain.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => triggerRenewal(domain.id, domain.domainName)}
+                            disabled={actionLoading === `renew-${domain.id}`}
+                            title="Trigger manual renewal"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${actionLoading === `renew-${domain.id}` ? "animate-spin" : ""}`} />
+                            {actionLoading === `renew-${domain.id}` ? "Working..." : "Renew"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredDomains.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="text-center py-10 text-gray-400">
+                          {allDomains.length === 0 ? (
+                            <div className="flex items-center justify-center gap-2">
+                              <RefreshCw className="w-4 h-4 animate-spin" /> Loading domains...
+                            </div>
+                          ) : "No domains found"}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-gray-400">
+                Clicking <strong>Renew</strong> on a domain with no pending challenge creates one (Phase 1).
+                Click it again after the customer confirms bridge.php is live to finalize and issue the certificate (Phase 2).
+              </p>
+            </div>
+          )}
+
+          {/* ── PRICING ───────────────────────────────────────────────────── */}
           {activeTab === "pricing" && (
             <div className="space-y-6">
               <h2 className="text-xl font-bold text-gray-900">Pricing</h2>
@@ -414,13 +613,12 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ── API KEYS ─────────────────────────────────────────────────── */}
+          {/* ── API KEYS ──────────────────────────────────────────────────── */}
           {activeTab === "keys" && (
             <div className="space-y-6">
               <h2 className="text-xl font-bold text-gray-900">API Keys</h2>
               <div className="bg-white rounded-xl border p-6 space-y-6 max-w-xl">
 
-                {/* ACME environment */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">ACME Environment</label>
                   <select
@@ -434,7 +632,6 @@ export default function AdminDashboard() {
                   <p className="text-xs text-orange-600 mt-1">⚠️ Staging certificates are not trusted by browsers</p>
                 </div>
 
-                {/* Paddle keys */}
                 {[
                   { key: "paddle_api_key", label: "Paddle API Key", placeholder: "pdl_live_apikey_..." },
                   { key: "paddle_webhook_secret", label: "Paddle Webhook Secret", placeholder: "pdl_ntfset_..." },
@@ -489,7 +686,7 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ── SITE ─────────────────────────────────────────────────────── */}
+          {/* ── SITE ──────────────────────────────────────────────────────── */}
           {activeTab === "site" && (
             <div className="space-y-6">
               <h2 className="text-xl font-bold text-gray-900">Site Management</h2>
@@ -578,7 +775,7 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ── ANALYTICS ────────────────────────────────────────────────── */}
+          {/* ── ANALYTICS ─────────────────────────────────────────────────── */}
           {activeTab === "analytics" && (
             <div className="space-y-6">
               <h2 className="text-xl font-bold text-gray-900">Google Analytics</h2>
