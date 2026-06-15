@@ -1,7 +1,8 @@
 /**
  * src/app/api/admin/domains/route.ts
- * GET  — fetch all domains with owner, certificate status, expiry
- * POST — trigger manual renewal for a specific domain
+ * GET    — fetch all domains with owner, certificate status, expiry
+ * POST   — trigger manual renewal for a specific domain
+ * DELETE — permanently delete a domain and all its data
  */
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
@@ -280,6 +281,44 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error("[admin/domains] Manual renewal error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// ── DELETE: Remove a domain and all its certificates/challenges ───────────────
+export async function DELETE(request: NextRequest) {
+  try {
+    const { userId } = auth();
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const admin = await getAdminUser(userId);
+    if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    const { domainId } = await request.json();
+    if (!domainId) return NextResponse.json({ error: "domainId required" }, { status: 400 });
+
+    // Confirm domain exists before deleting
+    const [row] = await db
+      .select({ domain: domains })
+      .from(domains)
+      .where(eq(domains.id, domainId))
+      .limit(1);
+
+    if (!row) return NextResponse.json({ error: "Domain not found" }, { status: 404 });
+
+    const domainName = row.domain.domainName;
+
+    // Schema has cascade delete on certificates and acmeChallenges (onDelete: "cascade")
+    // so deleting the domain row cleans everything up automatically
+    await db.delete(domains).where(eq(domains.id, domainId));
+
+    console.log(`[admin/domains] Deleted domain ${domainName} (id: ${domainId})`);
+
+    return NextResponse.json({
+      success: true,
+      message: `${domainName} and all associated certificates have been deleted.`,
+    });
+  } catch (error: any) {
+    console.error("[admin/domains] Delete error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
