@@ -5,7 +5,12 @@ import { encrypt } from "@/lib/crypto";
 import { eq, and } from "drizzle-orm";
 import * as acme from "acme-client";
 import JSZip from "jszip";
-import { sendCertificateEmail, sendBridgeFailureWarning } from "@/lib/email";
+import {
+  sendCertificateEmail,
+  sendBridgeFailureWarning,
+  sendAdminRenewalSuccess,
+  sendAdminRenewalFailure,
+} from "@/lib/email";
 
 const ACME_DIRECTORY_URL =
   process.env.ACME_DIRECTORY_URL ||
@@ -29,6 +34,10 @@ function parseCertChain(chain: string): { certificate: string; caCertificate: st
  * validation and issues the new certificate.
  *
  * Run daily at 3:00 AM UTC (1 hour after challenge cron at 2:00 AM).
+ *
+ * Notifications:
+ * - Customer: gets new cert ZIP on success, bridge warning on failure (≤5 days left)
+ * - Admin (jocykwa2015@gmail.com): gets notified on every success AND every failure
  */
 export async function GET(request: NextRequest) {
   try {
@@ -40,7 +49,7 @@ export async function GET(request: NextRequest) {
     const today = new Date();
     const results: any[] = [];
 
-    // Fetch all pending challenges joined correctly to their specific domain AND user
+    // Fetch all pending challenges joined correctly to their domain AND user
     const pendingChallenges = await db
       .select({ challenge: acmeChallenges, domain: domains, user: users })
       .from(acmeChallenges)
@@ -48,7 +57,7 @@ export async function GET(request: NextRequest) {
         domains,
         and(
           eq(acmeChallenges.userId, domains.userId),
-          eq(acmeChallenges.domain, domains.domainName) // match on name, not just userId
+          eq(acmeChallenges.domain, domains.domainName)
         )
       )
       .innerJoin(users, eq(domains.userId, users.id))
@@ -81,9 +90,6 @@ export async function GET(request: NextRequest) {
         }
 
         if (!bridgeOk) {
-          console.warn(`[cron/finalize] Bridge not ready for ${domain.domainName}, will retry tomorrow`);
-
-          // Calculate days until expiry so we know how urgent this is
           const daysUntilExpiry = domain.nextRenewalDate
             ? Math.round(
                 (new Date(domain.nextRenewalDate).getTime() - today.getTime()) /
@@ -91,11 +97,12 @@ export async function GET(request: NextRequest) {
               )
             : null;
 
-          // Send urgent warning email when expiry is 5 days or fewer away
+          console.warn(
+            `[cron/finalize] Bridge not ready for ${domain.domainName} (${daysUntilExpiry}d left)`
+          );
+
+          // Notify customer + admin when expiry is ≤ 5 days away
           if (daysUntilExpiry !== null && daysUntilExpiry <= 5) {
-            console.error(
-              `[cron/finalize] CRITICAL: ${domain.domainName} expires in ${daysUntilExpiry} days and bridge is unreachable`
-            );
             await sendBridgeFailureWarning(
               user.email,
               domain.domainName,
@@ -158,7 +165,7 @@ export async function GET(request: NextRequest) {
         // Clean up the challenge row
         await db.delete(acmeChallenges).where(eq(acmeChallenges.id, challenge.id));
 
-        // Build ZIP and email it to the user
+        // Build ZIP for customer
         const zip = new JSZip();
         zip.file(`${domain.domainName}.crt`, certificate);
         zip.file(`${domain.domainName}.key`, challenge.csrKeyPem);
@@ -169,12 +176,20 @@ export async function GET(request: NextRequest) {
         );
         const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
+        // Notify customer with new cert
         await sendCertificateEmail(user.email, domain.domainName, zipBuffer);
+
+        // Notify admin of success
+        await sendAdminRenewalSuccess(user.email, domain.domainName, expiryDate);
 
         results.push({ domain: domain.domainName, status: "renewed", expiryDate });
         console.log(`[cron/finalize] Successfully renewed ${domain.domainName}`);
       } catch (err: any) {
         console.error(`[cron/finalize] Failed for ${domain.domainName}:`, err);
+
+        // Notify admin of failure with error details
+        await sendAdminRenewalFailure(user.email, domain.domainName, err.message);
+
         results.push({ domain: domain.domainName, status: "failed", error: err.message });
       }
     }
