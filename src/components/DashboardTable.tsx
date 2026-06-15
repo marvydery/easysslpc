@@ -400,6 +400,11 @@ export default function DashboardTable({
                     📧 New certificate emailed to you. Download and install it on your server.
                   </p>
                 )}
+                {renewResult.phase === "order_expired" && (
+                  <p className="text-xs text-orange-600 mt-2">
+                    🔄 Click Renew Certificate one more time to start a fresh attempt.
+                  </p>
+                )}
               </div>
             </div>
             <div className="p-6 border-t">
