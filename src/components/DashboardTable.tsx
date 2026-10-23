@@ -59,6 +59,7 @@ export default function DashboardTable({
     success: boolean;
     message: string;
     phase?: string;
+    installed?: boolean;
   } | null>(null);
 
   const isBridgeTier = userTier === "pro" || userTier === "lifetime";
@@ -91,6 +92,7 @@ export default function DashboardTable({
         success: data.success,
         message: data.message || data.error || "Unknown error",
         phase: data.phase,
+        installed: data.installed === true,
       });
     } catch (err: any) {
       setRenewResult({
@@ -442,7 +444,9 @@ export default function DashboardTable({
                 )}
                 {renewResult.phase === "renewed" && (
                   <p className="text-xs text-green-600 mt-2">
-                    📧 New certificate emailed to you. Download and install it on your server.
+                    {renewResult.installed
+                      ? "A copy has also been emailed to you for your records. Nothing else to do."
+                      : "📧 New certificate emailed to you. Download and install it on your server."}
                   </p>
                 )}
                 {renewResult.phase === "order_expired" && (
