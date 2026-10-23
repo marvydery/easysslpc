@@ -5,6 +5,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { apexOf } from "@/lib/acme";
 import { isAuthorizedCron } from "@/lib/cron-auth";
 import { finalizeRenewal, isStale } from "@/lib/renewal";
+import { getPanelTypesByDomain } from "@/lib/panels";
 import { sendBridgeFailureWarning, sendAdminRenewalFailure } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,7 @@ export async function GET(request: NextRequest) {
     }
 
     const results: Array<Record<string, unknown>> = [];
+    const panelDomains = await getPanelTypesByDomain();
 
     for (const { user, rows: group } of Array.from(groups.values())) {
       const names = group.map((r) => r.domain);
@@ -71,7 +73,7 @@ export async function GET(request: NextRequest) {
 
       // Only auto-renew domains with a bridge are finalized here; manual
       // generations in progress are left for the customer to finish.
-      if (!domain || !domain.autoRenewEnabled || !domain.bridgeSecret) {
+      if (!domain || !domain.autoRenewEnabled || (!domain.bridgeSecret && !panelDomains[domain.id])) {
         results.push({ domain: label, status: "skipped_manual" });
         continue;
       }

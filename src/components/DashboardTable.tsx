@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Clock, Download, FileText, Key, Shield, Trash2, Wifi, RefreshCw } from "lucide-react";
+import { Clock, Download, FileText, Key, Server, Shield, Trash2, Wifi, RefreshCw } from "lucide-react";
+import PanelConnectModal from "./PanelConnectModal";
 import { differenceInDays, format } from "date-fns";
 
 type Domain = {
@@ -25,12 +26,15 @@ type DomainRow = {
 export default function DashboardTable({
   domains,
   userTier,
+  panelDomains = {},
   onDomainDeleted,
 }: {
   domains: DomainRow[];
   userTier: string;
+  panelDomains?: Record<string, string>;
   onDomainDeleted?: () => void;
 }) {
+  const [panelModal, setPanelModal] = useState<{ id: string; name: string } | null>(null);
   const [viewingCert, setViewingCert] = useState<{
     type: string;
     content: string;
@@ -191,7 +195,8 @@ export default function DashboardTable({
               const isExpiring = daysRemaining < 30;
               const isExpiredOrSoon = certificate && daysRemaining <= 14;
               const hasIncompleteChallenge = !certificate && domain.challengeToken;
-              const showBridge = isBridgeTier && domain.autoRenewEnabled && certificate;
+              const showAutoRenew = isBridgeTier && certificate;
+              const panelType = panelDomains[domain.id];
 
               return (
                 <tr key={domain.id}>
@@ -247,11 +252,13 @@ export default function DashboardTable({
 
                   {/* Auto-Renew */}
                   <td className="px-6 py-4">
-                    {userTier !== "free" || domain.autoRenewEnabled ? (
+                    {panelType || (domain.autoRenewEnabled && domain.bridgeSecret) ? (
                       <span className="inline-flex items-center gap-1 text-sm text-green-600">
                         <Clock className="w-4 h-4" />
                         Auto
                       </span>
+                    ) : isBridgeTier && certificate ? (
+                      <span className="text-sm text-amber-600">Not set up</span>
                     ) : (
                       <span className="text-sm text-gray-500">Manual</span>
                     )}
@@ -286,12 +293,34 @@ export default function DashboardTable({
                           CABUNDLE
                         </button>
 
-                        {/* Bridge Files — only for Pro/Lifetime with autoRenew enabled */}
-                        {showBridge && (
+                        {/* Auto-renewal setup — Pro/Lifetime: hosting panel (preferred) or bridge files */}
+                        {showAutoRenew && (
                           <div className="mt-2 pt-2 border-t border-gray-100 flex flex-col gap-1">
                             <span className="text-xs text-gray-400 font-medium flex items-center gap-1">
-                              <Wifi className="w-3 h-3" /> Bridge Files
+                              <Wifi className="w-3 h-3" /> Auto-Renewal
                             </span>
+                            {panelType ? (
+                              <button
+                                onClick={() => setPanelModal({ id: domain.id, name: domain.domainName })}
+                                className="inline-flex items-center gap-1 text-xs text-green-700 hover:text-green-800"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-green-600" />
+                                {panelType === "cpanel" ? "cPanel" : panelType} connected · Manage
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => setPanelModal({ id: domain.id, name: domain.domainName })}
+                                  className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+                                >
+                                  <Server className="w-3 h-3" />
+                                  Connect hosting panel
+                                </button>
+                                <span className="text-[10px] text-gray-400 mt-1">or use bridge files:</span>
+                              </>
+                            )}
+                            {!panelType && (
+                            <>
                             <button
                               onClick={() => downloadBridgeFile(domain.id, domain.domainName, "bridge.php", "download")}
                               disabled={downloadingBridge === domain.id}
@@ -308,6 +337,9 @@ export default function DashboardTable({
                               <Download className="w-3 h-3" />
                               .htaccess
                             </button>
+                            </>
+                            )}
+                            {(panelType || domain.autoRenewEnabled) && (
                             <button
                               onClick={() => checkBridgeSetup(domain.id)}
                               disabled={checkingBridge === domain.id}
@@ -325,11 +357,12 @@ export default function DashboardTable({
                                 <>✓ Check Auto Renewal</>
                               )}
                             </button>
+                            )}
                           </div>
                         )}
 
                         {/* Renew Certificate — shown when expired or expiring within 14 days */}
-                        {isExpiredOrSoon && isBridgeTier && domain.autoRenewEnabled && (
+                        {isExpiredOrSoon && isBridgeTier && (domain.autoRenewEnabled || panelType) && (
                           <div className="mt-2 pt-2 border-t border-gray-100">
                             <button
                               onClick={() => renewCertificate(domain.id, domain.domainName)}
@@ -369,6 +402,16 @@ export default function DashboardTable({
           </tbody>
         </table>
       </div>
+
+      {/* Hosting Panel Modal */}
+      {panelModal && (
+        <PanelConnectModal
+          domainId={panelModal.id}
+          domainName={panelModal.name}
+          onClose={() => setPanelModal(null)}
+          onChanged={() => onDomainDeleted?.()}
+        />
+      )}
 
       {/* Renew Result Modal */}
       {renewResult && (

@@ -9,6 +9,7 @@ import { db } from "@/lib/db";
 import { users, domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { describeResult, renewNow } from "@/lib/renewal";
+import { getPanelConnection } from "@/lib/panels";
 import { sendAdminRenewalFailure } from "@/lib/email";
 
 export const maxDuration = 60;
@@ -34,12 +35,12 @@ export async function POST(request: NextRequest) {
     if (dbUser.subscriptionTier === "free" && !dbUser.isAdmin) {
       return NextResponse.json({ error: "Renewal requires a Pro or Lifetime plan." }, { status: 403 });
     }
-    if (!domain.bridgeSecret) {
+    if (!domain.bridgeSecret && !(await getPanelConnection(domain.id))) {
       return NextResponse.json(
         {
           success: false,
           phase: "bridge_not_ready",
-          message: "Download bridge.php and .htaccess from your dashboard and upload them first.",
+          message: "Connect your hosting panel (or upload the bridge files) first.",
         },
         { status: 422 }
       );

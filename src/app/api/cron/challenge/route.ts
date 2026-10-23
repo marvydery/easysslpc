@@ -4,6 +4,7 @@ import { users, domains } from "@/lib/db/schema";
 import { eq, and, lte, isNotNull, asc } from "drizzle-orm";
 import { isAuthorizedCron } from "@/lib/cron-auth";
 import { createRenewalOrder, getPendingChallenges, isStale } from "@/lib/renewal";
+import { getPanelTypesByDomain } from "@/lib/panels";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -35,7 +36,6 @@ export async function GET(request: NextRequest) {
       .where(
         and(
           eq(domains.autoRenewEnabled, true),
-          isNotNull(domains.bridgeSecret),
           isNotNull(domains.nextRenewalDate),
           lte(domains.nextRenewalDate, threshold)
         )
@@ -43,8 +43,14 @@ export async function GET(request: NextRequest) {
       .orderBy(asc(domains.nextRenewalDate));
 
     const results: Array<{ domain: string; status: string; error?: string }> = [];
+    const panelDomains = await getPanelTypesByDomain();
 
     for (const { domain, user } of due) {
+      // Needs a way to pass Let's Encrypt's check: bridge.php or a hosting panel
+      if (!domain.bridgeSecret && !panelDomains[domain.id]) {
+        results.push({ domain: domain.domainName, status: "no_renewal_method" });
+        continue;
+      }
       if (Date.now() - started > TIME_BUDGET_MS) {
         results.push({ domain: domain.domainName, status: "deferred" });
         continue;

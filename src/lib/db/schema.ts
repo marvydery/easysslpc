@@ -66,6 +66,24 @@ export const certificates = pgTable("certificates", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Hosting panel connections — lets EasySSL write challenge files and install
+// renewed certificates through the customer's control panel API (cPanel, ...).
+// One connection per domain. Created at runtime by ensurePanelTable().
+export const panelConnections = pgTable("panel_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  domainId: uuid("domain_id").notNull().unique().references(() => domains.id, { onDelete: "cascade" }),
+  panelType: varchar("panel_type", { length: 30 }).notNull(),
+  host: varchar("host", { length: 255 }).notNull(),
+  username: varchar("username", { length: 255 }).notNull(),
+  tokenEncrypted: text("token_encrypted").notNull(),
+  lastStatus: varchar("last_status", { length: 20 }),
+  lastMessage: text("last_message"),
+  lastCheckedAt: timestamp("last_checked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Site Settings Table — single row, key/value store
 export const siteSettings = pgTable("site_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -112,3 +130,4 @@ export type NewAcmeChallenge = typeof acmeChallenges.$inferInsert;
 export type Certificate = typeof certificates.$inferSelect;
 export type NewCertificate = typeof certificates.$inferInsert;
 export type SiteSetting = typeof siteSettings.$inferSelect;
+export type PanelConnection = typeof panelConnections.$inferSelect;

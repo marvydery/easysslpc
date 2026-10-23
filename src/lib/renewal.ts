@@ -5,8 +5,11 @@
  *  - /api/ssl/renew       (customer "Renew Certificate" button)
  *  - /api/admin/domains   (admin "Renew" button)
  *
- * bridge.php reads challenge tokens straight from the database via /api/bridge,
- * so an order can be created and finalized in the same request.
+ * Two ways to pass Let's Encrypt's check and install the result:
+ *  - a connected hosting panel (src/lib/panels): we write the challenge file
+ *    and install the certificate through the panel's API;
+ *  - bridge.php, which reads challenge tokens from the database via /api/bridge.
+ * Either way an order can be created and finalized in the same request.
  */
 import * as acme from "acme-client";
 import JSZip from "jszip";
@@ -30,6 +33,9 @@ import {
 } from "@/lib/acme";
 import { checkChallengeServed, probeUrl } from "@/lib/http-probe";
 import { sendAdminRenewalSuccess, sendCertificateEmail } from "@/lib/email";
+import { adapterFor, getPanelConnection, panelLabel, PanelError, recordPanelStatus } from "@/lib/panels";
+import type { PanelAdapter } from "@/lib/panels/types";
+import type { PanelConnection } from "@/lib/db/schema";
 
 /** Let's Encrypt pending orders expire after 7 days; recreate before that. */
 const ORDER_MAX_AGE_MS = 6 * 24 * 60 * 60 * 1000;
@@ -142,6 +148,41 @@ export async function finalizeRenewal(
   domain: Domain,
   rows: AcmeChallenge[]
 ): Promise<FinalizeResult> {
+  // With a hosting panel connected, write the challenge files ourselves
+  const panel = await getPanelConnection(domain.id).catch(() => null);
+  const adapter = panel ? adapterFor(panel) : null;
+  let docRoot: string | null = null;
+  if (panel && adapter) {
+    try {
+      docRoot = await adapter.getDocRoot(apexOf(domain.domainName));
+      for (const row of rows) await adapter.writeChallenge(docRoot, row.token, row.keyAuthorization);
+    } catch (err: any) {
+      const message = err instanceof PanelError ? err.message : String(err?.message ?? err);
+      await recordPanelStatus(panel.id, "error", message);
+      return {
+        status: "bridge_not_ready",
+        url: panelLabel(panel.panelType),
+        reason: `couldn't write the verification file through ${panelLabel(panel.panelType)}: ${message}`,
+      };
+    }
+  }
+
+  try {
+    return await completeOrder(user, domain, rows, panel, adapter);
+  } finally {
+    if (adapter && docRoot) {
+      for (const row of rows) await adapter.removeChallenge(docRoot, row.token);
+    }
+  }
+}
+
+async function completeOrder(
+  user: User,
+  domain: Domain,
+  rows: AcmeChallenge[],
+  panel: PanelConnection | null,
+  adapter: PanelAdapter | null
+): Promise<FinalizeResult> {
   for (const row of rows) {
     const served = await checkChallengeServed(row.domain, row.token, row.keyAuthorization);
     if (!served.ok) return { status: "bridge_not_ready", url: served.url, reason: served.reason ?? "" };
@@ -197,7 +238,21 @@ export async function finalizeRenewal(
     .where(eq(domains.id, domain.id));
   await clearPendingChallenges(user.id, domain);
 
-  const install = domain.bridgeSecret ? await triggerBridgeInstall(domain) : null;
+  let install: InstallResult | null = null;
+  if (panel && adapter) {
+    const label = panelLabel(panel.panelType);
+    try {
+      await adapter.installCertificate(apexOf(domain.domainName), certificate, csrKeyPem, caCertificate);
+      install = { installed: true, method: panel.panelType, message: `Installed through ${label}.` };
+      await recordPanelStatus(panel.id, "ok", `Renewed and installed ${new Date().toUTCString()}`);
+    } catch (err: any) {
+      const message = err instanceof PanelError ? err.message : String(err?.message ?? err);
+      install = { installed: false, method: panel.panelType, message: `${label} couldn't install it: ${message}` };
+      await recordPanelStatus(panel.id, "error", install.message);
+    }
+  } else if (domain.bridgeSecret) {
+    install = await triggerBridgeInstall(domain);
+  }
 
   const zip = new JSZip();
   zip.file(`${domain.domainName}.crt`, certificate);
@@ -258,7 +313,9 @@ export function describeResult(domainName: string, result: FinalizeResult): stri
       return `${base} The certificate has been emailed to you — install it in your hosting panel.${why}`;
     }
     case "bridge_not_ready":
-      return `bridge.php is not serving the verification token at ${result.url} (${result.reason}). Run "Check Auto Renewal" to see what is wrong.`;
+      return `${domainName} couldn't be verified: ${result.reason}${
+        result.url.startsWith("http") ? ` (checked ${result.url})` : ""
+      }. Run "Check Auto Renewal" to see what is wrong.`;
     case "order_invalid":
       return `Let's Encrypt could not validate ${domainName}: ${result.message}. Click Renew again to start a fresh attempt.`;
   }

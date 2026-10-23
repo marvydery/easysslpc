@@ -22,9 +22,11 @@ type DomainRow = {
 export default function DashboardClient({
   domains,
   userTier,
+  panelDomains,
 }: {
   domains: DomainRow[];
   userTier: string;
+  panelDomains: Record<string, string>;
 }) {
   const router = useRouter();
   const handleDomainDeleted = () => {
@@ -34,6 +36,7 @@ export default function DashboardClient({
     <DashboardTable
       domains={domains}
       userTier={userTier}
+      panelDomains={panelDomains}
       onDomainDeleted={handleDomainDeleted}
     />
   );

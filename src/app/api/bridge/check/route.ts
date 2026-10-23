@@ -7,6 +7,7 @@ import { apexOf } from "@/lib/acme";
 import { BRIDGE_TEST_TOKEN, BRIDGE_VERSION } from "@/lib/bridge-kit";
 import { probeUrl } from "@/lib/http-probe";
 import { getRenewalDomainList } from "@/lib/renewal";
+import { adapterFor, getPanelConnection, recordPanelStatus, testPanelConnection } from "@/lib/panels";
 
 export const maxDuration = 30;
 
@@ -110,13 +111,7 @@ export async function GET(request: NextRequest) {
         : "Auto-renewal is not enabled. Download bridge.php to enable it.",
     });
 
-    checks.push({
-      label: "Bridge Secret",
-      status: domain.bridgeSecret ? "pass" : "fail",
-      message: domain.bridgeSecret
-        ? "Bridge secret is configured"
-        : "No bridge secret found. Download bridge.php to generate one.",
-    });
+    const panel = await getPanelConnection(domain.id).catch(() => null);
 
     checks.push({
       label: "Renewal Date",
@@ -126,7 +121,28 @@ export async function GET(request: NextRequest) {
         : "No certificate yet. Generate a certificate first.",
     });
 
-    if (domain.bridgeSecret) {
+    if (panel) {
+      // Hosting panel: run the same end-to-end test used when connecting
+      const result = await testPanelConnection(
+        adapterFor(panel),
+        panel.panelType,
+        apexDomain,
+        await getRenewalDomainList(domain)
+      );
+      checks.push(...result.steps);
+      const firstFail = result.steps.find((s) => s.status === "fail");
+      await recordPanelStatus(panel.id, result.ok ? "ok" : "error", firstFail?.message ?? "Connection test passed");
+    } else {
+      checks.push({
+        label: "Bridge Secret",
+        status: domain.bridgeSecret ? "pass" : "fail",
+        message: domain.bridgeSecret
+          ? "Bridge secret is configured"
+          : "Connect your hosting panel, or download bridge.php to set up the bridge.",
+      });
+    }
+
+    if (!panel && domain.bridgeSecret) {
       // Every name on the certificate must route through the bridge (e.g. apex + www)
       const hosts = await getRenewalDomainList(domain);
       const chainChecks = await Promise.all(hosts.map((h) => testBridgeChain(h, domain.domainName)));
