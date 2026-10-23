@@ -8,6 +8,7 @@ import { Lock, Plus, Crown, ShieldCheck, SearchCheck } from "lucide-react";
 import { getDomainLimit, getDomainLimitLabel } from "@/lib/plans";
 import DashboardClient from "@/components/DashboardClient";
 import { getPanelTypesByDomain } from "@/lib/panels";
+import { getLiveScans } from "@/lib/live-scan";
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "";
 
@@ -94,6 +95,7 @@ export default async function DashboardPage() {
   }
   const uniqueDomains = Array.from(domainMap.values());
   const panelDomains = await getPanelTypesByDomain(currentDbUser.id);
+  const liveScans = await getLiveScans(uniqueDomains.map((d) => d.domain.id));
   
   // Only count domains with certificates towards the limit
   const domainsWithCertificates = uniqueDomains.filter(d => d.certificate !== null);
@@ -257,6 +259,7 @@ export default async function DashboardPage() {
               domains={uniqueDomains}
               userTier={currentDbUser.subscriptionTier}
               panelDomains={panelDomains}
+              liveScans={liveScans}
             />
           )}
         </div>

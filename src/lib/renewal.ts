@@ -35,6 +35,7 @@ import { checkChallengeServed, probeUrl } from "@/lib/http-probe";
 import { sendAdminRenewalSuccess, sendCertificateEmail } from "@/lib/email";
 import { adapterFor, getPanelConnection, panelLabel, PanelError, recordPanelStatus } from "@/lib/panels";
 import type { PanelAdapter } from "@/lib/panels/types";
+import { clearLiveScan } from "@/lib/live-scan";
 import type { PanelConnection } from "@/lib/db/schema";
 
 /** Let's Encrypt pending orders expire after 7 days; recreate before that. */
@@ -237,6 +238,7 @@ async function completeOrder(
     .set({ nextRenewalDate: expiryDate, challengeToken: null, challengeValue: null, updatedAt: new Date() })
     .where(eq(domains.id, domain.id));
   await clearPendingChallenges(user.id, domain);
+  await clearLiveScan(domain.id);
 
   let install: InstallResult | null = null;
   if (panel && adapter) {

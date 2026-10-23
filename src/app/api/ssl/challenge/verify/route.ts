@@ -8,6 +8,7 @@ import { encrypt } from "@/lib/crypto";
 import { ACME_DIRECTORY_URL, apexOf, getCertExpiry, parseCertChain } from "@/lib/acme";
 import { checkChallengeServed } from "@/lib/http-probe";
 import { clearPendingChallenges, getPendingChallenges } from "@/lib/renewal";
+import { clearLiveScan } from "@/lib/live-scan";
 import JSZip from "jszip";
 
 // Let's Encrypt validation + issuance usually takes 5–30 seconds
@@ -121,6 +122,7 @@ export async function POST(request: NextRequest) {
       .where(eq(domains.id, domain.id));
 
     await clearPendingChallenges(user.id, domain);
+    await clearLiveScan(domain.id);
 
     const zip = new JSZip();
     zip.file(`${apexDomain}.crt`, certificate);

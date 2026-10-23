@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import DashboardTable from "./DashboardTable";
+import type { LiveScan } from "@/lib/live-scan";
 
 type Domain = {
   id: string;
@@ -23,10 +24,12 @@ export default function DashboardClient({
   domains,
   userTier,
   panelDomains,
+  liveScans,
 }: {
   domains: DomainRow[];
   userTier: string;
   panelDomains: Record<string, string>;
+  liveScans: Record<string, LiveScan>;
 }) {
   const router = useRouter();
   const handleDomainDeleted = () => {
@@ -37,6 +40,7 @@ export default function DashboardClient({
       domains={domains}
       userTier={userTier}
       panelDomains={panelDomains}
+      liveScans={liveScans}
       onDomainDeleted={handleDomainDeleted}
     />
   );

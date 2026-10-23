@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Clock, Download, FileText, Key, Server, Shield, Trash2, Wifi, RefreshCw } from "lucide-react";
+import { Clock, Download, FileText, Key, RotateCw, Server, Shield, Trash2, Wifi, RefreshCw } from "lucide-react";
 import PanelConnectModal from "./PanelConnectModal";
+import type { LiveScan } from "@/lib/live-scan";
 import { differenceInDays, format } from "date-fns";
 
 type Domain = {
@@ -27,14 +28,18 @@ export default function DashboardTable({
   domains,
   userTier,
   panelDomains = {},
+  liveScans = {},
   onDomainDeleted,
 }: {
   domains: DomainRow[];
   userTier: string;
   panelDomains?: Record<string, string>;
+  liveScans?: Record<string, LiveScan>;
   onDomainDeleted?: () => void;
 }) {
   const [panelModal, setPanelModal] = useState<{ id: string; name: string } | null>(null);
+  const [rescanning, setRescanning] = useState<string | null>(null);
+  const [rescanNote, setRescanNote] = useState<{ id: string; ok: boolean; text: string } | null>(null);
   const [viewingCert, setViewingCert] = useState<{
     type: string;
     content: string;
@@ -102,6 +107,39 @@ export default function DashboardTable({
       });
     } finally {
       setRenewingDomain(null);
+    }
+  }
+
+  async function rescanDomain(domainId: string) {
+    setRescanning(domainId);
+    setRescanNote(null);
+    try {
+      const res = await fetch("/api/ssl/rescan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domainId }),
+      });
+      const data = await res.json();
+      const scan = data.scan;
+      if (!res.ok || !scan) {
+        setRescanNote({ id: domainId, ok: false, text: data.error || "Rescan failed" });
+      } else if (scan.error) {
+        setRescanNote({ id: domainId, ok: false, text: `Couldn't read the live certificate: ${scan.error}` });
+      } else {
+        const until = scan.validTo ? format(new Date(scan.validTo), "MMM d, yyyy") : "unknown";
+        setRescanNote({
+          id: domainId,
+          ok: scan.valid,
+          text: scan.valid
+            ? `Live: ${scan.managedByEasySSL ? "EasySSL" : scan.issuer ?? "another provider"} · valid until ${until}`
+            : `The live certificate is invalid or expired (until ${until}).`,
+        });
+        onDomainDeleted?.(); // refresh dashboard data
+      }
+    } catch {
+      setRescanNote({ id: domainId, ok: false, text: "Network error — please try again" });
+    } finally {
+      setRescanning(null);
     }
   }
 
@@ -191,9 +229,15 @@ export default function DashboardTable({
           </thead>
           <tbody className="divide-y">
             {domains.map(({ domain, certificate }) => {
-              const daysRemaining = certificate
-                ? differenceInDays(new Date(certificate.expiryDate), new Date())
-                : 0;
+              // A valid certificate installed outside EasySSL takes precedence for status/expiry
+              const scan = liveScans[domain.id];
+              const external = scan && scan.valid && !scan.managedByEasySSL && scan.validTo ? scan : null;
+              const expiryDate = external?.validTo
+                ? new Date(external.validTo)
+                : certificate
+                ? new Date(certificate.expiryDate)
+                : null;
+              const daysRemaining = expiryDate ? differenceInDays(expiryDate, new Date()) : 0;
               const isExpiring = daysRemaining < 30;
               const isExpiredOrSoon = certificate && daysRemaining <= 14;
               const hasIncompleteChallenge = !certificate && domain.challengeToken;
@@ -221,7 +265,7 @@ export default function DashboardTable({
 
                   {/* Status */}
                   <td className="px-6 py-4">
-                    {certificate ? (
+                    {expiryDate ? (
                       <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
                         daysRemaining < 0
                           ? "bg-red-100 text-red-800"
@@ -240,12 +284,17 @@ export default function DashboardTable({
 
                   {/* Expires */}
                   <td className="px-6 py-4">
-                    {certificate ? (
+                    {expiryDate ? (
                       <div>
                         <div className="text-sm text-gray-900">
-                          {format(new Date(certificate.expiryDate), "MMM d, yyyy")}
+                          {format(expiryDate, "MMM d, yyyy")}
                         </div>
                         <div className="text-xs text-gray-500">{daysRemaining} days remaining</div>
+                        {external && (
+                          <div className="mt-1 text-xs text-gray-500">
+                            Installed outside EasySSL{external.issuer ? ` · ${external.issuer}` : ""}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <span className="text-gray-500">-</span>
@@ -270,6 +319,19 @@ export default function DashboardTable({
                   <td className="px-6 py-4">
                     {certificate ? (
                       <div className="flex flex-col gap-1">
+                        <button
+                          onClick={() => rescanDomain(domain.id)}
+                          disabled={rescanning === domain.id}
+                          className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900 disabled:opacity-50"
+                        >
+                          <RotateCw className={`w-3 h-3 ${rescanning === domain.id ? "animate-spin" : ""}`} />
+                          {rescanning === domain.id ? "Scanning…" : "Rescan live certificate"}
+                        </button>
+                        {rescanNote?.id === domain.id && (
+                          <span className={`text-[11px] ${rescanNote.ok ? "text-green-700" : "text-red-600"}`}>
+                            {rescanNote.text}
+                          </span>
+                        )}
                         <button
                           onClick={() => viewCertificate(domain.id, "crt")}
                           disabled={loading}
