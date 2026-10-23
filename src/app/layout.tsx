@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Newsreader, Hanken_Grotesk, IBM_Plex_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/react";
@@ -7,7 +7,20 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { getSetting, SETTING_KEYS } from "@/lib/settings";
 
-const inter = Inter({ subsets: ["latin"] });
+const display = Newsreader({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  variable: "--font-newsreader",
+  display: "swap",
+  adjustFontFallback: false, // no fallback metrics published for Newsreader
+});
+const body = Hanken_Grotesk({ subsets: ["latin"], variable: "--font-hanken", display: "swap" });
+const mono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "EasySSL - Free Let's Encrypt SSL Certificates",
@@ -23,7 +36,7 @@ export default async function RootLayout({
 
   return (
     <ClerkProvider>
-      <html lang="en">
+      <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
         <head>
           {/* Paddle.js — loaded in head per Paddle docs */}
           <Script
@@ -31,7 +44,7 @@ export default async function RootLayout({
             strategy="beforeInteractive"
           />
         </head>
-        <body className={inter.className}>
+        <body>
           {children}
           <Analytics />
           <SpeedInsights />

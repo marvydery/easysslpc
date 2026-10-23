@@ -1,324 +1,405 @@
 import Link from "next/link";
-import { Lock, Zap, Shield, Check, SearchCheck, Upload, RefreshCw, ChevronDown } from "lucide-react";
+import { ArrowRight, Check, Minus, Plus } from "lucide-react";
 import SslChecker from "@/components/SslChecker";
+import SpecimenCertificate from "@/components/brand/SpecimenCertificate";
+import { GuillocheBand, Wordmark } from "@/components/brand/Marks";
+
+const btnPrimary =
+  "inline-flex items-center justify-center gap-2 rounded-ctl bg-brand px-5 py-3 text-[15px] font-medium text-brand-on transition-colors duration-150 hover:bg-brand-hover active:bg-brand-active focus-visible:outline-none focus-visible:shadow-focus";
+const btnQuiet =
+  "inline-flex items-center gap-1.5 text-[15px] font-medium text-ink underline decoration-line-strong underline-offset-[6px] transition-colors hover:decoration-brand focus-visible:outline-none focus-visible:shadow-focus rounded-[2px]";
+const label = "font-mono text-[11px] uppercase tracking-label text-ink-3";
+
+const steps = [
+  {
+    n: "01",
+    title: "Enter your domain",
+    body: "We request a certificate from Let's Encrypt and give you one small verification file.",
+  },
+  {
+    n: "02",
+    title: "Upload one file",
+    body: "Put it in your hosting's File Manager. We confirm Let's Encrypt can see it, then hand you the certificate.",
+  },
+  {
+    n: "03",
+    title: "Never think about it again",
+    body: "Upload the bridge files once. Every 90 days a new certificate is issued, installed and emailed to you.",
+    pro: true,
+  },
+];
+
+const facts = [
+  {
+    k: "Encrypted at rest",
+    v: "Private keys are encrypted with AES-256 before they're stored, and only decrypted when you download them.",
+  },
+  {
+    k: "Any host that takes an upload",
+    v: "cPanel, Plesk, DirectAdmin or plain FTP. If you can upload a file, EasySSL works.",
+  },
+  {
+    k: "Renewal starts 30 days early",
+    v: "If something on your server needs fixing, there are weeks to do it, and we'll email you what to change.",
+  },
+  {
+    k: "Trusted by every browser",
+    v: "Certificates are issued by Let's Encrypt, the same authority behind hundreds of millions of sites.",
+  },
+];
+
+type Plan = {
+  name: string;
+  price: string;
+  per: string;
+  blurb: string;
+  cta: string;
+  featured?: boolean;
+  features: { text: string; included: boolean }[];
+};
+
+const plans: Plan[] = [
+  {
+    name: "Free",
+    price: "$0",
+    per: "forever",
+    blurb: "For a few sites you're happy to renew by hand.",
+    cta: "Start free",
+    features: [
+      { text: "Up to 5 domains", included: true },
+      { text: "Guided file verification", included: true },
+      { text: "Download CRT, KEY & CA bundle", included: true },
+      { text: "Renew yourself every 90 days", included: true },
+      { text: "Automatic renewal", included: false },
+    ],
+  },
+  {
+    name: "Pro",
+    price: "$29",
+    per: "per year",
+    blurb: "For site owners and freelancers who never want to see an expiry again.",
+    cta: "Start with Pro",
+    featured: true,
+    features: [
+      { text: "Up to 10 domains", included: true },
+      { text: "Bridge files: upload once", included: true },
+      { text: "Automatic renewal & install", included: true },
+      { text: "Every renewal emailed to you", included: true },
+      { text: "Auto-renewal health check", included: true },
+    ],
+  },
+  {
+    name: "Lifetime",
+    price: "$49",
+    per: "once",
+    blurb: "Everything in Pro for more sites, paid for once.",
+    cta: "Get Lifetime",
+    features: [
+      { text: "Up to 20 domains", included: true },
+      { text: "Bridge files: upload once", included: true },
+      { text: "Automatic renewal & install", included: true },
+      { text: "Every renewal emailed to you", included: true },
+      { text: "No subscription to remember", included: true },
+    ],
+  },
+];
+
+const faqs = [
+  {
+    q: "Is the Free plan really free?",
+    a: "Yes. You can secure up to 5 domains with 90-day certificates at no cost. To renew, you repeat the quick verification step before each certificate expires.",
+  },
+  {
+    q: "What are the bridge files?",
+    a: "Two small files (bridge.php and .htaccess) you upload to your hosting once. When a certificate is 30 days from expiring, they let us complete Let's Encrypt's check on your behalf, so a new certificate is issued without you doing anything. On most cPanel hosts it's installed for you too.",
+  },
+  {
+    q: "Do I need technical knowledge?",
+    a: "No. If you can upload a file through cPanel's File Manager or FTP, you can use EasySSL. Each step tells you exactly what to upload and where.",
+  },
+  {
+    q: "Will I know when a certificate renews?",
+    a: "Yes. Pro and Lifetime renewals are emailed to you with the new certificate files, and your dashboard updates straight away.",
+  },
+  {
+    q: "Which hosting providers does it work with?",
+    a: "Any host that lets you upload files: cPanel, Plesk, DirectAdmin or a custom server. Automatic installation currently works on cPanel hosts; elsewhere you install the emailed certificate yourself.",
+  },
+  {
+    q: "Are my private keys safe?",
+    a: "Private keys are encrypted with AES-256 before they're stored and are only decrypted when you download them from your dashboard.",
+  },
+];
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
+    <div className="min-h-screen bg-canvas text-ink">
       {/* Header */}
-      <header className="container mx-auto px-4 py-6 flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <Lock className="w-8 h-8 text-blue-600" />
-          <h1 className="text-2xl font-bold text-gray-900">EasySSL</h1>
-        </div>
-        <div className="flex gap-4">
-          <Link
-            href="/sign-in"
-            className="px-4 py-2 text-blue-600 hover:text-blue-700 font-medium"
-          >
-            Sign In
+      <header className="border-b border-line">
+        <div className="mx-auto flex max-w-page items-center justify-between gap-6 px-5 py-4 sm:px-8">
+          <Link href="/" className="rounded-[2px] text-[15px] focus-visible:outline-none focus-visible:shadow-focus" aria-label="EasySSL home">
+            <Wordmark />
           </Link>
-          <Link
-            href="/sign-up"
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-          >
-            Get Started
-          </Link>
+          <nav aria-label="Main" className="flex items-center gap-6 text-[15px]">
+            <div className="hidden items-center gap-6 text-ink-2 md:flex">
+              <a href="#how" className="transition-colors hover:text-ink">How it works</a>
+              <a href="#pricing" className="transition-colors hover:text-ink">Pricing</a>
+              <a href="#faq" className="transition-colors hover:text-ink">FAQ</a>
+            </div>
+            <Link href="/sign-in" className="text-ink-2 transition-colors hover:text-ink">
+              Sign in
+            </Link>
+            <Link href="/sign-up" className={`${btnPrimary} hidden px-4 py-2 sm:inline-flex`}>
+              Get a free certificate
+            </Link>
+          </nav>
         </div>
       </header>
 
-      {/* Hero Section */}
-      <section className="container mx-auto px-4 py-20 text-center">
-        <div className="inline-flex items-center gap-2 bg-blue-100 text-blue-700 text-sm font-medium px-4 py-2 rounded-full mb-6">
-          <Shield className="w-4 h-4" />
-          Powered by Let&apos;s Encrypt — Trusted by millions of websites
-        </div>
-        <h2 className="text-5xl font-bold text-gray-900 mb-6">
-          Free SSL Certificates
-          <br />
-          <span className="text-blue-600">Auto-Renewed Forever</span>
-        </h2>
-        <p className="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
-          Generate trusted SSL certificates in minutes. Upload two files once and
-          your certificate renews automatically — no more expired sites.
-        </p>
-        <div className="flex items-center justify-center gap-4 flex-wrap">
-          <Link
-            href="/sign-up"
-            className="inline-block px-8 py-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-lg shadow-lg shadow-blue-200"
-          >
-            Get Started Free
-          </Link>
-          <Link
-            href="/sign-in"
-            className="inline-block px-8 py-4 bg-white text-blue-600 border-2 border-blue-200 rounded-lg hover:border-blue-400 font-medium text-lg"
-          >
-            Sign In →
-          </Link>
-        </div>
-        <p className="text-sm text-gray-500 mt-4">No credit card required · Free plan available</p>
-      </section>
-
-      {/* How It Works */}
-      <section className="container mx-auto px-4 py-16">
-        <h2 className="text-3xl font-bold text-center text-gray-900 mb-4">How It Works</h2>
-        <p className="text-center text-gray-600 mb-12 max-w-xl mx-auto">
-          Three simple steps to get your SSL certificate — and keep it forever.
-        </p>
-        <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-          <div className="relative bg-white p-6 rounded-xl border border-gray-200 shadow-sm text-center">
-            <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg mx-auto mb-4">1</div>
-            <Zap className="w-8 h-8 text-blue-600 mx-auto mb-3" />
-            <h3 className="font-bold text-gray-900 mb-2">Generate</h3>
-            <p className="text-sm text-gray-600">Enter your domain and we create your SSL certificate via Let&apos;s Encrypt.</p>
-          </div>
-          <div className="relative bg-white p-6 rounded-xl border border-gray-200 shadow-sm text-center">
-            <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg mx-auto mb-4">2</div>
-            <Upload className="w-8 h-8 text-blue-600 mx-auto mb-3" />
-            <h3 className="font-bold text-gray-900 mb-2">Verify</h3>
-            <p className="text-sm text-gray-600">Upload a small verification file to your server to prove domain ownership.</p>
-          </div>
-          <div className="relative bg-white p-6 rounded-xl border border-gray-200 shadow-sm text-center">
-            <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-lg mx-auto mb-4">3</div>
-            <RefreshCw className="w-8 h-8 text-blue-600 mx-auto mb-3" />
-            <h3 className="font-bold text-gray-900 mb-2">Auto-Renew</h3>
-            <p className="text-sm text-gray-600">Pro users upload the Bridge file once — renewals happen automatically every 90 days.</p>
-          </div>
-        </div>
-      </section>
-
-      {/* SSL Checker Section */}
-      <section className="container mx-auto px-4 py-16">
-        <div className="max-w-3xl mx-auto">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-14 h-14 bg-blue-100 rounded-2xl mb-4">
-              <SearchCheck className="w-7 h-7 text-blue-600" />
+      <main>
+        {/* Hero */}
+        <section className="mx-auto grid max-w-page items-center gap-16 px-5 pb-24 pt-16 sm:px-8 lg:grid-cols-[1.05fr_1fr] lg:gap-12 lg:pb-32 lg:pt-24">
+          <div>
+            <p className={`${label} animate-rise`}>Free SSL · Let&apos;s Encrypt · Auto-renewal</p>
+            <h1
+              className="mt-6 font-display text-display font-normal text-balance animate-rise"
+              style={{ "--delay": "80ms" } as React.CSSProperties}
+            >
+              Free SSL certificates that <em className="text-brand">renew themselves.</em>
+            </h1>
+            <p
+              className="mt-7 max-w-[34rem] text-lg leading-relaxed text-ink-2 text-pretty animate-rise"
+              style={{ "--delay": "160ms" } as React.CSSProperties}
+            >
+              Get a trusted certificate for any site on shared hosting in about five minutes. Go Pro, and every
+              renewal after that happens on its own: issued, installed and emailed to you.
+            </p>
+            <div
+              className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4 animate-rise"
+              style={{ "--delay": "240ms" } as React.CSSProperties}
+            >
+              <Link href="/sign-up" className={btnPrimary}>
+                Get a free certificate <ArrowRight className="h-4 w-4" />
+              </Link>
+              <a href="#check" className={btnQuiet}>
+                Check your site&apos;s SSL
+              </a>
             </div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-3">
-              Free SSL Certificate Checker
+            <p
+              className="mt-10 font-mono text-[12px] text-ink-3 animate-rise"
+              style={{ "--delay": "320ms" } as React.CSSProperties}
+            >
+              5 domains free · No card required · cPanel, Plesk, DirectAdmin
+            </p>
+          </div>
+
+          <SpecimenCertificate />
+        </section>
+
+        {/* How it works */}
+        <section id="how" className="scroll-mt-8 border-t border-line">
+          <div className="mx-auto max-w-page px-5 py-24 sm:px-8">
+            <div className="grid gap-6 lg:grid-cols-[1fr_2fr] lg:gap-12">
+              <p className={label}>How it works</p>
+              <h2 className="max-w-[30rem] font-display text-4xl leading-[1.1] tracking-[-0.015em] text-balance sm:text-5xl">
+                Three steps. The third one runs itself.
+              </h2>
+            </div>
+
+            <ol className="mt-16 grid border-t border-line-strong md:grid-cols-3">
+              {steps.map((s, i) => (
+                <li
+                  key={s.n}
+                  className={`relative py-8 md:py-10 md:pr-10 ${i > 0 ? "border-t border-line md:border-l md:border-t-0 md:pl-10" : ""}`}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <span className="font-mono text-[13px] text-ink-3">{s.n}</span>
+                    {s.pro && (
+                      <span className="rounded-full border border-brand/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-label text-brand">
+                        Pro
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="mt-8 font-display text-2xl leading-tight">{s.title}</h3>
+                  <p className="mt-3 leading-relaxed text-ink-2">{s.body}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </section>
+
+        {/* SSL checker */}
+        <section id="check" className="scroll-mt-8 border-y border-line bg-surface">
+          <div className="mx-auto grid max-w-page gap-10 px-5 py-24 sm:px-8 lg:grid-cols-[1fr_1.3fr] lg:gap-16">
+            <div>
+              <p className={label}>Free SSL checker</p>
+              <h2 className="mt-5 font-display text-4xl leading-[1.1] tracking-[-0.015em] text-balance">
+                Is your certificate about to lapse?
+              </h2>
+              <p className="mt-5 max-w-[28rem] leading-relaxed text-ink-2">
+                Check any site&apos;s certificate: who issued it, which names it covers and exactly how many days it has
+                left. No account needed.
+              </p>
+            </div>
+            <SslChecker />
+          </div>
+        </section>
+
+        {/* What you get */}
+        <section className="mx-auto max-w-page px-5 py-24 sm:px-8">
+          <div className="grid gap-6 lg:grid-cols-[1fr_2fr] lg:gap-12">
+            <p className={label}>What you get</p>
+            <h2 className="max-w-[32rem] font-display text-4xl leading-[1.1] tracking-[-0.015em] text-balance sm:text-5xl">
+              Built to do one job, and never drop it.
             </h2>
-            <p className="text-gray-600 text-lg">
-              Instantly check the SSL status of any website — expiry date,
-              issuer, validity, and more.
-            </p>
           </div>
-          <SslChecker />
-        </div>
-      </section>
+          <dl className="mt-16 grid border-t border-line-strong sm:grid-cols-2">
+            {facts.map((f, i) => (
+              <div
+                key={f.k}
+                className={`py-8 sm:py-10 ${i % 2 === 1 ? "sm:border-l sm:border-line sm:pl-10" : "sm:pr-10"} ${i > 0 ? "border-t border-line" : ""} ${i === 1 ? "sm:border-t-0" : ""}`}
+              >
+                <dt className="font-display text-2xl leading-tight">{f.k}</dt>
+                <dd className="mt-3 max-w-[30rem] leading-relaxed text-ink-2">{f.v}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
 
-      {/* Features */}
-      <section className="container mx-auto px-4 py-20">
-        <h2 className="text-3xl font-bold text-center text-gray-900 mb-12">Why Choose EasySSL?</h2>
-        <div className="grid md:grid-cols-3 gap-8">
-          <div className="bg-white p-8 rounded-xl shadow-lg">
-            <Zap className="w-12 h-12 text-blue-600 mb-4" />
-            <h3 className="text-xl font-bold mb-3">Instant Generation</h3>
-            <p className="text-gray-600">
-              Generate your SSL certificate in minutes with our simple step-by-step wizard. No technical knowledge needed.
-            </p>
-          </div>
-          <div className="bg-white p-8 rounded-xl shadow-lg">
-            <Shield className="w-12 h-12 text-blue-600 mb-4" />
-            <h3 className="text-xl font-bold mb-3">Auto-Renewal</h3>
-            <p className="text-gray-600">
-              Upload the Bridge file once and forget about renewals forever. We handle everything automatically.
-            </p>
-          </div>
-          <div className="bg-white p-8 rounded-xl shadow-lg">
-            <Lock className="w-12 h-12 text-blue-600 mb-4" />
-            <h3 className="text-xl font-bold mb-3">Secure & Encrypted</h3>
-            <p className="text-gray-600">
-              All private keys are encrypted with AES-256. Your keys are never stored in plain text.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Pricing */}
-      <section className="container mx-auto px-4 py-20">
-        <h2 className="text-4xl font-bold text-center mb-4">Simple Pricing</h2>
-        <p className="text-center text-gray-600 mb-12">Start free. Upgrade when you need auto-renewal.</p>
-        <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-          {/* Free */}
-          <div className="bg-white p-8 rounded-xl shadow-lg border-2 border-gray-200">
-            <h3 className="text-2xl font-bold mb-2">Free</h3>
-            <p className="text-gray-600 mb-4">Perfect to get started</p>
-            <div className="text-4xl font-bold mb-6">$0</div>
-            <ul className="space-y-3 mb-8">
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Up to <strong>5 domains</strong></span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Manual file upload verification</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Manual renewal every 90 days</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Download CRT, KEY & CABUNDLE</span>
-              </li>
-            </ul>
-            <Link
-              href="/sign-up"
-              className="block w-full text-center px-6 py-3 bg-gray-200 text-gray-900 rounded-lg hover:bg-gray-300 font-medium"
-            >
-              Get Started Free
-            </Link>
-          </div>
-
-          {/* Pro */}
-          <div className="bg-blue-600 text-white p-8 rounded-xl shadow-xl transform scale-105">
-            <div className="bg-blue-500 text-xs font-bold px-3 py-1 rounded-full inline-block mb-2">
-              MOST POPULAR
+        {/* Pricing */}
+        <section id="pricing" className="scroll-mt-8 border-t border-line">
+          <div className="mx-auto max-w-page px-5 py-24 sm:px-8">
+            <div className="grid gap-6 lg:grid-cols-[1fr_2fr] lg:gap-12">
+              <p className={label}>Pricing</p>
+              <div>
+                <h2 className="max-w-[32rem] font-display text-4xl leading-[1.1] tracking-[-0.015em] text-balance sm:text-5xl">
+                  Free to start. Pay for peace of mind.
+                </h2>
+                <p className="mt-5 max-w-[30rem] leading-relaxed text-ink-2">
+                  Every plan uses the same Let&apos;s Encrypt certificates. Paid plans add automatic renewal.
+                </p>
+              </div>
             </div>
-            <h3 className="text-2xl font-bold mb-2">Pro</h3>
-            <p className="text-blue-100 mb-4">Yearly Subscription</p>
-            <div className="text-4xl font-bold mb-6">$29<span className="text-xl font-normal">/year</span></div>
-            <ul className="space-y-3 mb-8">
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-blue-200 mt-0.5 flex-shrink-0" />
-                <span>Up to <strong>10 domains</strong></span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-blue-200 mt-0.5 flex-shrink-0" />
-                <span>Bridge file — upload once, renew forever</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-blue-200 mt-0.5 flex-shrink-0" />
-                <span>Fully automatic renewal</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-blue-200 mt-0.5 flex-shrink-0" />
-                <span>Email + dashboard delivery</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-blue-200 mt-0.5 flex-shrink-0" />
-                <span>Auto-renewal check tool</span>
-              </li>
-            </ul>
-            <Link
-              href="/sign-up"
-              className="block w-full text-center px-6 py-3 bg-white text-blue-600 rounded-lg hover:bg-blue-50 font-medium"
-            >
-              Start Pro
-            </Link>
-          </div>
 
-          {/* Lifetime */}
-          <div className="bg-white p-8 rounded-xl shadow-lg border-2 border-blue-600">
-            <div className="bg-blue-50 text-blue-700 text-xs font-bold px-3 py-1 rounded-full inline-block mb-2">
-              BEST VALUE
+            <div className="mt-16 grid overflow-hidden rounded-card border border-line-strong bg-surface lg:grid-cols-3">
+              {plans.map((p, i) => (
+                <div
+                  key={p.name}
+                  className={`flex flex-col p-8 sm:p-10 ${p.featured ? "order-first bg-brand-soft/60 lg:order-none" : ""} ${i > 0 ? "border-t border-line lg:border-l lg:border-t-0" : ""}`}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <h3 className="font-display text-2xl">{p.name}</h3>
+                    {p.featured && (
+                      <span className="font-mono text-[10px] uppercase tracking-label text-brand">Recommended</span>
+                    )}
+                  </div>
+                  <p className="mt-6 flex items-baseline gap-2">
+                    <span className="font-display text-5xl tracking-[-0.02em] tabular">{p.price}</span>
+                    <span className="font-mono text-[12px] text-ink-3">{p.per}</span>
+                  </p>
+                  <p className="mt-4 min-h-[3rem] text-[15px] leading-relaxed text-ink-2">{p.blurb}</p>
+
+                  <ul className="mt-8 space-y-3 border-t border-line pt-6 text-[15px]">
+                    {p.features.map((f) => (
+                      <li key={f.text} className={`flex items-start gap-3 ${f.included ? "text-ink" : "text-ink-3"}`}>
+                        {f.included ? (
+                          <Check className="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+                        ) : (
+                          <Minus className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                        )}
+                        <span>
+                          {f.text}
+                          {!f.included && <span className="sr-only"> (not included)</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <Link
+                    href="/sign-up"
+                    className={`mt-10 ${
+                      p.featured
+                        ? btnPrimary
+                        : "inline-flex items-center justify-center rounded-ctl border border-line-strong px-5 py-3 text-[15px] font-medium text-ink transition-colors hover:border-ink focus-visible:outline-none focus-visible:shadow-focus"
+                    }`}
+                  >
+                    {p.cta}
+                  </Link>
+                </div>
+              ))}
             </div>
-            <h3 className="text-2xl font-bold mb-2">Lifetime</h3>
-            <p className="text-gray-600 mb-4">One-time Payment</p>
-            <div className="text-4xl font-bold mb-6">$49</div>
-            <ul className="space-y-3 mb-8">
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Up to <strong>20 domains</strong></span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Bridge file — upload once, renew forever</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Fully automatic renewal</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Email + dashboard delivery</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span>Auto-renewal check tool</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <Check className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
-                <span className="font-semibold">Pay once, use forever</span>
-              </li>
-            </ul>
-            <Link
-              href="/sign-up"
-              className="block w-full text-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-            >
-              Get Lifetime Access
-            </Link>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* FAQ */}
-      <section className="container mx-auto px-4 py-20 max-w-3xl">
-        <h2 className="text-3xl font-bold text-center text-gray-900 mb-12">Frequently Asked Questions</h2>
-        <div className="space-y-4">
-          {[
-            {
-              q: "Is the Free plan really free?",
-              a: "Yes — completely free. You get one domain with a 90-day SSL certificate. You'll need to manually renew it every 90 days by repeating the verification step."
-            },
-            {
-              q: "What is the Bridge Protocol?",
-              a: "The Bridge Protocol is a small PHP file you upload to your server once. When your certificate is about to expire, our system uses it to automatically complete the verification challenge on your behalf — so your certificate renews without you doing anything."
-            },
-            {
-              q: "Do I need technical knowledge to use EasySSL?",
-              a: "No. If you can upload a file to your hosting via cPanel File Manager or FTP, you can use EasySSL. Our step-by-step wizard guides you through every step."
-            },
-            {
-              q: "Will I be notified when my certificate renews?",
-              a: "Yes. Pro and Lifetime users receive an email with the new certificate files every time a renewal completes. The dashboard is also updated automatically."
-            },
-            {
-              q: "What hosting providers does EasySSL work with?",
-              a: "EasySSL works with any hosting provider that supports file uploads — cPanel, Plesk, DirectAdmin, or custom servers. If you can upload files via FTP or File Manager, it works."
-            },
-            {
-              q: "Are my private keys safe?",
-              a: "Yes. Private keys are encrypted with AES-256 before being stored. They are only decrypted temporarily when you download them from the dashboard."
-            },
-          ].map((item, i) => (
-            <details key={i} className="bg-white border border-gray-200 rounded-xl p-6 group">
-              <summary className="flex items-center justify-between cursor-pointer font-semibold text-gray-900 list-none">
-                {item.q}
-                <ChevronDown className="w-5 h-5 text-gray-400 group-open:rotate-180 transition-transform flex-shrink-0 ml-4" />
-              </summary>
-              <p className="mt-4 text-gray-600 text-sm leading-relaxed">{item.a}</p>
-            </details>
-          ))}
-        </div>
-      </section>
-
-      {/* Final CTA */}
-      <section className="container mx-auto px-4 py-20 text-center">
-        <div className="bg-blue-600 rounded-2xl p-12 max-w-3xl mx-auto">
-          <h2 className="text-3xl font-bold text-white mb-4">Ready to secure your website?</h2>
-          <p className="text-blue-100 mb-8">Join hundreds of websites using EasySSL for free SSL certificates.</p>
-          <Link
-            href="/sign-up"
-            className="inline-block px-8 py-4 bg-white text-blue-600 rounded-lg hover:bg-blue-50 font-bold text-lg"
-          >
-            Get Started Free →
-          </Link>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="border-t border-gray-200 py-8 mt-8">
-        <div className="container mx-auto px-4 text-center text-gray-600">
-          <div className="flex justify-center gap-6 mb-3 text-sm">
-            <Link href="/terms" className="hover:text-gray-900">Terms of Service</Link>
-            <Link href="/privacy" className="hover:text-gray-900">Privacy Policy</Link>
-            <Link href="/refund" className="hover:text-gray-900">Refund Policy</Link>
-            <a href="mailto:support@easyssl.app" className="hover:text-gray-900">support@easyssl.app</a>
+        {/* FAQ */}
+        <section id="faq" className="scroll-mt-8 border-t border-line">
+          <div className="mx-auto grid max-w-page gap-10 px-5 py-24 sm:px-8 lg:grid-cols-[1fr_2fr] lg:gap-12">
+            <div>
+              <p className={label}>FAQ</p>
+              <h2 className="mt-5 font-display text-4xl leading-[1.1] tracking-[-0.015em]">Questions, answered.</h2>
+              <p className="mt-5 leading-relaxed text-ink-2">
+                Something else?{" "}
+                <a href="mailto:support@easyssl.app" className="text-ink underline decoration-line-strong underline-offset-4 hover:decoration-brand">
+                  support@easyssl.app
+                </a>
+              </p>
+            </div>
+            <div className="border-t border-line-strong">
+              {faqs.map((item) => (
+                <details key={item.q} className="group border-b border-line">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-6 text-lg font-medium text-ink transition-colors hover:text-brand focus-visible:outline-none focus-visible:shadow-focus [&::-webkit-details-marker]:hidden">
+                    {item.q}
+                    <Plus className="h-5 w-5 shrink-0 text-ink-3 transition-transform duration-200 group-open:rotate-45" aria-hidden="true" />
+                  </summary>
+                  <p className="max-w-[40rem] pb-7 pr-10 leading-relaxed text-ink-2">{item.a}</p>
+                </details>
+              ))}
+            </div>
           </div>
-          <p className="text-sm">&copy; {new Date().getFullYear()} EasySSL. All rights reserved.</p>
+        </section>
+
+        {/* Closing */}
+        <section className="mx-auto max-w-page px-5 pb-24 sm:px-8">
+          <div className="relative overflow-hidden rounded-card bg-brand px-8 py-16 text-brand-on sm:px-14 sm:py-20">
+            <GuillocheBand className="pointer-events-none absolute inset-x-0 bottom-0 h-40 w-full text-brand-on/15" lines={22} />
+            <div className="relative max-w-[36rem]">
+              <h2 className="font-display text-4xl leading-[1.1] tracking-[-0.015em] text-balance sm:text-5xl">
+                Never see &ldquo;Not secure&rdquo; on your site again.
+              </h2>
+              <p className="mt-5 text-lg leading-relaxed text-brand-on/80">
+                Your first certificate takes about five minutes. Keeping it is automatic.
+              </p>
+              <Link
+                href="/sign-up"
+                className="mt-10 inline-flex items-center gap-2 rounded-ctl bg-canvas px-5 py-3 text-[15px] font-medium text-ink transition-colors hover:bg-surface focus-visible:outline-none focus-visible:shadow-focus"
+              >
+                Get a free certificate <ArrowRight className="h-4 w-4" />
+              </Link>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="border-t border-line">
+        <div className="mx-auto flex max-w-page flex-col gap-8 px-5 py-12 sm:px-8 md:flex-row md:items-start md:justify-between">
+          <div className="max-w-[24rem]">
+            <Wordmark className="text-[14px]" />
+            <p className="mt-4 text-[13px] leading-relaxed text-ink-3">
+              Certificates are issued by Let&apos;s Encrypt. EasySSL is an independent service and is not affiliated
+              with Let&apos;s Encrypt or ISRG.
+            </p>
+          </div>
+          <nav aria-label="Footer" className="flex flex-wrap gap-x-8 gap-y-3 text-[14px] text-ink-2">
+            <Link href="/terms" className="hover:text-ink">Terms</Link>
+            <Link href="/privacy" className="hover:text-ink">Privacy</Link>
+            <Link href="/refund" className="hover:text-ink">Refunds</Link>
+            <a href="mailto:support@easyssl.app" className="hover:text-ink">support@easyssl.app</a>
+          </nav>
+        </div>
+        <div className="mx-auto max-w-page px-5 pb-10 font-mono text-[11px] text-ink-3 sm:px-8">
+          © {new Date().getFullYear()} EasySSL
         </div>
       </footer>
-    </main>
+    </div>
   );
 }

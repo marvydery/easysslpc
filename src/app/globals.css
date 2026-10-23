@@ -2,26 +2,262 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * EasySSL design tokens
+ * Philosophy: security-print document meets engineering instrument.
+ * Warm paper, near-black green ink, one deep "secure" green, hairlines over shadows.
+ * Colours are space-separated RGB so Tailwind opacity modifiers work (bg-brand/10).
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Colour: backgrounds */
+  --color-bg-primary: 247 245 240;      /* warm paper */
+  --color-bg-secondary: 255 253 248;    /* document / card */
+  --color-bg-tertiary: 239 236 228;     /* wells, inputs, table heads */
+  --color-bg-inverse: 20 32 26;
+
+  /* Colour: text */
+  --color-text-primary: 20 32 26;       /* ink */
+  --color-text-secondary: 74 86 80;
+  --color-text-tertiary: 124 133 127;   /* placeholder, captions */
+  --color-text-inverse: 247 245 240;
+  --color-text-link: 15 107 71;
+
+  /* Colour: borders */
+  --color-border-primary: 196 190 176;
+  --color-border-secondary: 220 215 203;
+  --color-border-focus: 15 107 71;
+
+  /* Colour: accent (the "secure" green) */
+  --color-accent-primary: 15 107 71;
+  --color-accent-primary-hover: 11 86 57;
+  --color-accent-primary-active: 8 68 45;
+  --color-accent-on-primary: 255 255 255;
+  --color-accent-soft: 227 239 232;
+  --color-accent-secondary: 232 163 61; /* amber mark, decorative only */
+
+  /* Colour: status (always paired with a word, never colour alone) */
+  --color-status-success: 15 107 71;
+  --color-status-success-soft: 227 239 232;
+  --color-status-warning: 154 98 18;
+  --color-status-warning-soft: 247 236 214;
+  --color-status-error: 178 58 38;
+  --color-status-error-soft: 246 225 219;
+  --color-status-info: 74 86 80;
+
+  --color-surface-overlay: 20 32 26;
+
+  /* Spacing: 4px base (Tailwind's scale mirrors this) */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+  --space-9: 6rem;
+  --space-10: 8rem;
+  --space-11: 12rem;
+  --space-12: 16rem;
+
+  /* Typography (families come from next/font variables set in layout.tsx) */
+  --font-family-display: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  --font-family-body: var(--font-hanken), ui-sans-serif, system-ui, sans-serif;
+  --font-family-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-md: 1.125rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+  --font-size-2xl: 2rem;
+  --font-size-3xl: 2.75rem;
+  --font-size-4xl: clamp(2.75rem, 4.2vw + 1rem, 4.75rem);
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.08;
+  --line-height-normal: 1.55;
+  --line-height-relaxed: 1.7;
+
+  --letter-spacing-tight: -0.02em;
+  --letter-spacing-normal: 0;
+  --letter-spacing-wide: 0.12em;
+
+  /* Layout */
+  --max-width-content: 40rem;
+  --max-width-wide: 64rem;
+  --max-width-page: 76rem;
+
+  --border-radius-sm: 3px;
+  --border-radius-md: 6px;
+  --border-radius-lg: 10px;
+  --border-radius-full: 9999px;
+
+  --shadow-sm: 0 1px 0 rgb(20 32 26 / 0.04);
+  --shadow-md: 0 1px 2px rgb(20 32 26 / 0.06), 0 12px 32px -16px rgb(20 32 26 / 0.22);
+  --shadow-lg: 0 2px 4px rgb(20 32 26 / 0.05), 0 30px 60px -24px rgb(20 32 26 / 0.35);
+  --shadow-focus: 0 0 0 3px rgb(15 107 71 / 0.3);
+
+  /* Motion */
+  --duration-instant: 50ms;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+  --duration-slower: 600ms;
+
+  --easing-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --easing-in: cubic-bezier(0.4, 0, 1, 1);
+  --easing-out: cubic-bezier(0, 0, 0.2, 1);
+  --easing-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Breakpoints (reference; Tailwind screens use the same values) */
+  --breakpoint-sm: 375px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+}
+
+/* Dark: deep green-black, warm off-white ink, brighter green for contrast */
+[data-theme="dark"] {
+  --color-bg-primary: 15 21 18;
+  --color-bg-secondary: 22 30 26;
+  --color-bg-tertiary: 11 16 13;
+  --color-bg-inverse: 233 230 221;
+
+  --color-text-primary: 233 230 221;
+  --color-text-secondary: 169 177 171;
+  --color-text-tertiary: 115 125 119;
+  --color-text-inverse: 15 21 18;
+  --color-text-link: 91 197 152;
+
+  --color-border-primary: 54 66 60;
+  --color-border-secondary: 39 49 44;
+  --color-border-focus: 91 197 152;
+
+  --color-accent-primary: 63 178 131;
+  --color-accent-primary-hover: 91 197 152;
+  --color-accent-primary-active: 54 160 116;
+  --color-accent-on-primary: 6 20 13;
+  --color-accent-soft: 22 48 38;
+  --color-accent-secondary: 227 169 75;
+
+  --color-status-success: 91 197 152;
+  --color-status-success-soft: 22 48 38;
+  --color-status-warning: 227 169 75;
+  --color-status-warning-soft: 51 40 26;
+  --color-status-error: 229 118 95;
+  --color-status-error-soft: 58 31 25;
+  --color-status-info: 169 177 171;
+
+  --color-surface-overlay: 0 0 0;
+
+  --shadow-sm: 0 1px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -16px rgb(0 0 0 / 0.6);
+  --shadow-lg: 0 2px 4px rgb(0 0 0 / 0.4), 0 30px 60px -24px rgb(0 0 0 / 0.75);
+  --shadow-focus: 0 0 0 3px rgb(91 197 152 / 0.35);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --color-bg-primary: 15 21 18;
+    --color-bg-secondary: 22 30 26;
+    --color-bg-tertiary: 11 16 13;
+    --color-bg-inverse: 233 230 221;
+
+    --color-text-primary: 233 230 221;
+    --color-text-secondary: 169 177 171;
+    --color-text-tertiary: 115 125 119;
+    --color-text-inverse: 15 21 18;
+    --color-text-link: 91 197 152;
+
+    --color-border-primary: 54 66 60;
+    --color-border-secondary: 39 49 44;
+    --color-border-focus: 91 197 152;
+
+    --color-accent-primary: 63 178 131;
+    --color-accent-primary-hover: 91 197 152;
+    --color-accent-primary-active: 54 160 116;
+    --color-accent-on-primary: 6 20 13;
+    --color-accent-soft: 22 48 38;
+    --color-accent-secondary: 227 169 75;
+
+    --color-status-success: 91 197 152;
+    --color-status-success-soft: 22 48 38;
+    --color-status-warning: 227 169 75;
+    --color-status-warning-soft: 51 40 26;
+    --color-status-error: 229 118 95;
+    --color-status-error-soft: 58 31 25;
+    --color-status-info: 169 177 171;
+
+    --color-surface-overlay: 0 0 0;
+
+    --shadow-sm: 0 1px 0 rgb(0 0 0 / 0.3);
+    --shadow-md: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -16px rgb(0 0 0 / 0.6);
+    --shadow-lg: 0 2px 4px rgb(0 0 0 / 0.4), 0 30px 60px -24px rgb(0 0 0 / 0.75);
+    --shadow-focus: 0 0 0 3px rgb(91 197 152 / 0.35);
   }
 }
 
+/*
+ * Body keeps browser-default colours for now: dashboard pages still use
+ * hard-coded Tailwind greys and are restyled in the next phase. Redesigned
+ * pages paint themselves with bg-canvas / text-ink.
+ */
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-family-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Motion: one orchestrated page-load reveal, plus the renewal track fill */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes track-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes seal-turn {
+  to { transform: rotate(360deg); }
+}
+
+.animate-rise {
+  animation: rise var(--duration-slower) var(--easing-out) both;
+  animation-delay: var(--delay, 0ms);
+}
+.animate-track {
+  transform-origin: left center;
+  animation: track-fill 1.6s var(--easing-default) both;
+  animation-delay: var(--delay, 0ms);
+}
+.animate-seal {
+  animation: seal-turn 80s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-track,
+  .animate-seal {
+    animation: none;
   }
 }

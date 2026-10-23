@@ -1,20 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import {
-  Search,
-  ShieldCheck,
-  ShieldX,
-  AlertTriangle,
-  Clock,
-  Calendar,
-  Globe,
-  Building2,
-  Fingerprint,
-  Loader2,
-  ChevronDown,
-  ChevronUp,
-} from "lucide-react";
+import { ArrowRight, ChevronDown, Loader2 } from "lucide-react";
 
 interface CertInfo {
   domain: string;
@@ -29,29 +16,22 @@ interface CertInfo {
   subjectAltNames: string[];
 }
 
-function StatusBadge({ daysRemaining, valid }: { daysRemaining: number; valid: boolean }) {
-  if (!valid || daysRemaining < 0) {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 bg-red-100 text-red-700 rounded-full font-semibold">
-        <ShieldX className="w-5 h-5" />
-        {daysRemaining < 0 ? "Expired" : "Invalid Certificate"}
-      </div>
-    );
-  }
-  if (daysRemaining < 30) {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 bg-yellow-100 text-yellow-700 rounded-full font-semibold">
-        <AlertTriangle className="w-5 h-5" />
-        Expiring Soon
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 rounded-full font-semibold">
-      <ShieldCheck className="w-5 h-5" />
-      Valid & Secure
-    </div>
-  );
+type State = "secure" | "expiring" | "expired";
+
+function stateOf(result: CertInfo): State {
+  if (!result.valid || result.daysRemaining < 0) return "expired";
+  if (result.daysRemaining < 30) return "expiring";
+  return "secure";
+}
+
+const STATE_STYLE: Record<State, { label: string; text: string; soft: string; dot: string }> = {
+  secure: { label: "Secure", text: "text-status-ok", soft: "bg-status-ok-soft border-status-ok/30", dot: "bg-status-ok" },
+  expiring: { label: "Expiring", text: "text-status-warn", soft: "bg-status-warn-soft border-status-warn/30", dot: "bg-status-warn" },
+  expired: { label: "Expired or invalid", text: "text-status-error", soft: "bg-status-error-soft border-status-error/30", dot: "bg-status-error" },
+};
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <p className="font-mono text-[10px] uppercase tracking-label text-ink-3">{children}</p>;
 }
 
 export default function SslChecker() {
@@ -92,165 +72,125 @@ export default function SslChecker() {
   };
 
   const formatDate = (iso: string) =>
-    new Date(iso).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
+    new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
-  const daysColor =
-    result && result.daysRemaining < 0
-      ? "text-red-600"
-      : result && result.daysRemaining < 30
-      ? "text-yellow-600"
-      : "text-green-600";
+  const state = result ? stateOf(result) : null;
+  const style = state ? STATE_STYLE[state] : null;
 
   return (
-    <div className="w-full max-w-2xl mx-auto">
-      {/* Search Form */}
-      <form onSubmit={handleCheck} className="flex gap-3">
-        <div className="flex-1 relative">
-          <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-          <input
-            type="text"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            placeholder="e.g. github.com or https://example.com"
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-            disabled={loading}
-          />
-        </div>
+    <div className="w-full">
+      <form onSubmit={handleCheck} className="flex flex-col gap-2 sm:flex-row">
+        <label htmlFor="ssl-check-domain" className="sr-only">
+          Domain to check
+        </label>
+        <input
+          id="ssl-check-domain"
+          type="text"
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          value={domain}
+          onChange={(e) => setDomain(e.target.value)}
+          placeholder="yourbusiness.com"
+          className="min-w-0 flex-1 rounded-ctl border border-line-strong bg-surface px-4 py-3 font-mono text-[15px] text-ink placeholder:text-ink-3 transition-shadow focus:border-brand focus:outline-none focus:shadow-focus disabled:opacity-60"
+          disabled={loading}
+        />
         <button
           type="submit"
           disabled={loading || !domain.trim()}
-          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          className="inline-flex items-center justify-center gap-2 rounded-ctl bg-ink px-5 py-3 text-[15px] font-medium text-ink-inverse transition-colors hover:bg-ink/85 focus-visible:outline-none focus-visible:shadow-focus disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Search className="w-4 h-4" />
-          )}
-          {loading ? "Checking…" : "Check SSL"}
+          {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+          {loading ? "Checking…" : "Check certificate"}
         </button>
       </form>
 
-      {/* Error State */}
       {error && (
-        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-          <ShieldX className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
-          <div>
-            <p className="font-medium text-red-800">Could not retrieve certificate</p>
-            <p className="text-sm text-red-600 mt-1">{error}</p>
-          </div>
+        <div role="alert" className="mt-4 rounded-ctl border border-status-error/30 bg-status-error-soft p-4">
+          <p className="text-sm font-medium text-status-error">Couldn&apos;t read a certificate</p>
+          <p className="mt-1 text-sm text-ink-2">{error}</p>
         </div>
       )}
 
-      {/* Results */}
-      {result && (
-        <div className="mt-4 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-          {/* Top Summary Bar */}
-          <div className="p-5 flex items-center justify-between border-b border-gray-100">
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Checked domain</p>
-              <p className="font-semibold text-gray-900 text-lg">{result.domain}</p>
+      {result && style && (
+        <div className="mt-4 overflow-hidden rounded-card border border-line-strong bg-surface" aria-live="polite">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
+            <div className="min-w-0">
+              <Label>Checked</Label>
+              <p className="mt-1 truncate font-mono text-[15px] text-ink">{result.domain}</p>
             </div>
-            <StatusBadge daysRemaining={result.daysRemaining} valid={result.valid} />
-          </div>
-
-          {/* Key Metrics */}
-          <div className="grid grid-cols-3 divide-x divide-gray-100 border-b border-gray-100">
-            <div className="p-4 text-center">
-              <p className="text-xs text-gray-500 mb-1 flex items-center justify-center gap-1">
-                <Clock className="w-3 h-3" /> Days Remaining
-              </p>
-              <p className={`text-2xl font-bold ${daysColor}`}>
-                {result.daysRemaining < 0 ? "0" : result.daysRemaining}
-              </p>
-            </div>
-            <div className="p-4 text-center">
-              <p className="text-xs text-gray-500 mb-1 flex items-center justify-center gap-1">
-                <Calendar className="w-3 h-3" /> Valid From
-              </p>
-              <p className="text-sm font-medium text-gray-700">{formatDate(result.validFrom)}</p>
-            </div>
-            <div className="p-4 text-center">
-              <p className="text-xs text-gray-500 mb-1 flex items-center justify-center gap-1">
-                <Calendar className="w-3 h-3" /> Expires On
-              </p>
-              <p className="text-sm font-medium text-gray-700">{formatDate(result.validTo)}</p>
-            </div>
-          </div>
-
-          {/* Issuer / Subject */}
-          <div className="p-5 grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                <Building2 className="w-3 h-3" /> Issued To
-              </p>
-              <p className="text-sm font-medium text-gray-800">
-                {result.subject.CN || result.domain}
-              </p>
-              {result.subject.O && (
-                <p className="text-xs text-gray-500">{result.subject.O}</p>
-              )}
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                <ShieldCheck className="w-3 h-3" /> Issued By
-              </p>
-              <p className="text-sm font-medium text-gray-800">
-                {result.issuer.CN || "Unknown CA"}
-              </p>
-              {result.issuer.O && (
-                <p className="text-xs text-gray-500">{result.issuer.O}</p>
-              )}
-            </div>
-          </div>
-
-          {/* Expandable Technical Details */}
-          <div className="border-t border-gray-100">
-            <button
-              onClick={() => setShowDetails(!showDetails)}
-              className="w-full px-5 py-3 flex items-center justify-between text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-label ${style.soft} ${style.text}`}
             >
-              <span className="font-medium">Technical Details</span>
-              {showDetails ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
+              <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+              {style.label}
+            </span>
+          </div>
+
+          <dl className="grid grid-cols-3 divide-x divide-line border-b border-line">
+            <div className="px-5 py-4">
+              <dt><Label>Days left</Label></dt>
+              <dd className={`mt-1 font-display text-3xl leading-none tabular ${style.text}`}>
+                {Math.max(result.daysRemaining, 0)}
+              </dd>
+            </div>
+            <div className="px-5 py-4">
+              <dt><Label>Valid from</Label></dt>
+              <dd className="mt-2 font-mono text-[13px] text-ink">{formatDate(result.validFrom)}</dd>
+            </div>
+            <div className="px-5 py-4">
+              <dt><Label>Expires</Label></dt>
+              <dd className="mt-2 font-mono text-[13px] text-ink">{formatDate(result.validTo)}</dd>
+            </div>
+          </dl>
+
+          <dl className="grid grid-cols-2 gap-4 px-5 py-4">
+            <div>
+              <dt><Label>Issued to</Label></dt>
+              <dd className="mt-1 text-sm text-ink">{result.subject.CN || result.domain}</dd>
+              {result.subject.O && <dd className="text-xs text-ink-3">{result.subject.O}</dd>}
+            </div>
+            <div>
+              <dt><Label>Issued by</Label></dt>
+              <dd className="mt-1 text-sm text-ink">{result.issuer.CN || "Unknown authority"}</dd>
+              {result.issuer.O && <dd className="text-xs text-ink-3">{result.issuer.O}</dd>}
+            </div>
+          </dl>
+
+          <div className="border-t border-line">
+            <button
+              type="button"
+              onClick={() => setShowDetails(!showDetails)}
+              aria-expanded={showDetails}
+              className="flex w-full items-center justify-between px-5 py-3 text-sm text-ink-2 transition-colors hover:bg-sunken focus-visible:outline-none focus-visible:shadow-focus"
+            >
+              <span className="font-medium">Technical details</span>
+              <ChevronDown className={`h-4 w-4 transition-transform ${showDetails ? "rotate-180" : ""}`} />
             </button>
 
             {showDetails && (
-              <div className="px-5 pb-5 space-y-3 bg-gray-50">
+              <div className="space-y-4 bg-sunken/60 px-5 pb-5 pt-1">
                 {result.subjectAltNames.length > 0 && (
                   <div>
-                    <p className="text-xs text-gray-500 mb-1">Subject Alternative Names</p>
-                    <div className="flex flex-wrap gap-1">
+                    <Label>Names covered</Label>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
                       {result.subjectAltNames.map((san) => (
-                        <span
-                          key={san}
-                          className="inline-block px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-mono"
-                        >
+                        <span key={san} className="rounded-[3px] border border-line bg-surface px-2 py-0.5 font-mono text-xs text-ink">
                           {san}
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
-
                 <div>
-                  <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                    <Fingerprint className="w-3 h-3" /> SHA-1 Fingerprint
-                  </p>
-                  <p className="text-xs font-mono text-gray-700 break-all bg-white p-2 rounded border border-gray-200">
+                  <Label>SHA-1 fingerprint</Label>
+                  <p className="mt-1.5 break-all rounded-[3px] border border-line bg-surface p-2 font-mono text-xs text-ink-2">
                     {result.fingerprint}
                   </p>
                 </div>
-
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">Serial Number</p>
-                  <p className="text-xs font-mono text-gray-700 break-all bg-white p-2 rounded border border-gray-200">
+                  <Label>Serial number</Label>
+                  <p className="mt-1.5 break-all rounded-[3px] border border-line bg-surface p-2 font-mono text-xs text-ink-2">
                     {result.serialNumber}
                   </p>
                 </div>
@@ -258,31 +198,18 @@ export default function SslChecker() {
             )}
           </div>
 
-          {/* CTA for expiring certs */}
-          {result.daysRemaining < 30 && result.daysRemaining >= 0 && (
-            <div className="p-4 bg-yellow-50 border-t border-yellow-100 flex items-center justify-between">
-              <p className="text-sm text-yellow-800">
-                ⚠️ Your certificate expires in {result.daysRemaining} days. Renew it now!
+          {state !== "secure" && (
+            <div className={`flex flex-wrap items-center justify-between gap-3 border-t px-5 py-4 ${style.soft}`}>
+              <p className="text-sm text-ink">
+                {state === "expiring"
+                  ? `This certificate expires in ${result.daysRemaining} day${result.daysRemaining === 1 ? "" : "s"}.`
+                  : "Visitors are seeing a security warning on this site."}
               </p>
               <a
                 href="/sign-up"
-                className="text-sm font-medium px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-ctl bg-brand px-4 py-2 text-sm font-medium text-brand-on transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:shadow-focus"
               >
-                Renew with EasySSL
-              </a>
-            </div>
-          )}
-
-          {(result.daysRemaining < 0 || !result.valid) && (
-            <div className="p-4 bg-red-50 border-t border-red-100 flex items-center justify-between">
-              <p className="text-sm text-red-800">
-                🚨 This certificate has expired or is invalid. Fix it immediately!
-              </p>
-              <a
-                href="/sign-up"
-                className="text-sm font-medium px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                Get New Certificate
+                Get a free certificate <ArrowRight className="h-3.5 w-3.5" />
               </a>
             </div>
           )}
