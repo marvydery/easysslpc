@@ -265,10 +265,10 @@ export default async function DashboardPage() {
               Upgrade for Automatic Renewals & More Domains
             </h3>
             <p className="text-blue-100 mb-2">
-              <strong>Pro</strong> — $29/year · up to 5 domains · auto-renewal
+              <strong>Pro</strong> — $29/year · up to 10 domains · auto-renewal
             </p>
             <p className="text-blue-100 mb-6">
-              <strong>Lifetime</strong> — $49 once · up to 10 domains · auto-renewal forever
+              <strong>Lifetime</strong> — $49 once · up to 20 domains · auto-renewal forever
             </p>
             <Link
               href="/dashboard/upgrade"

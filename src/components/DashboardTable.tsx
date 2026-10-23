@@ -36,6 +36,7 @@ export default function DashboardTable({
     content: string;
     filename: string;
   } | null>(null);
+  const [certCopied, setCertCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [downloadingBridge, setDownloadingBridge] = useState<string | null>(null);
@@ -123,10 +124,11 @@ export default function DashboardTable({
     URL.revokeObjectURL(url);
   }
 
-  function copyToClipboard() {
+  async function copyToClipboard() {
     if (!viewingCert) return;
-    navigator.clipboard.writeText(viewingCert.content);
-    alert("Copied to clipboard!");
+    await navigator.clipboard.writeText(viewingCert.content);
+    setCertCopied(true);
+    setTimeout(() => setCertCopied(false), 2000);
   }
 
   async function deletePendingDomain(domainId: string, domainName: string) {
@@ -551,9 +553,13 @@ export default function DashboardTable({
             <div className="p-6 border-t flex gap-3">
               <button
                 onClick={copyToClipboard}
-                className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
+                className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                  certCopied
+                    ? "bg-green-600 text-white"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
               >
-                Copy to Clipboard
+                {certCopied ? "Copied!" : "Copy to Clipboard"}
               </button>
               <button
                 onClick={downloadCert}

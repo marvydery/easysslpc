@@ -621,21 +621,21 @@ export default function AdminDashboard() {
                   <div className="px-4 py-3 flex justify-between items-center">
                     <div>
                       <p className="font-medium text-gray-900">Free Plan</p>
-                      <p className="text-xs text-gray-500">1 domain · 90-day manual renewal</p>
+                      <p className="text-xs text-gray-500">5 domains · 90-day manual renewal</p>
                     </div>
                     <span className="text-gray-700 font-semibold">$0</span>
                   </div>
                   <div className="px-4 py-3 flex justify-between items-center">
                     <div>
                       <p className="font-medium text-gray-900">Pro Plan</p>
-                      <p className="text-xs text-gray-500">5 domains · auto-renewal · billed annually</p>
+                      <p className="text-xs text-gray-500">10 domains · auto-renewal · billed annually</p>
                     </div>
                     <span className="text-blue-700 font-semibold">$29/yr</span>
                   </div>
                   <div className="px-4 py-3 flex justify-between items-center">
                     <div>
                       <p className="font-medium text-gray-900">Lifetime Plan</p>
-                      <p className="text-xs text-gray-500">10 domains · auto-renewal · one-time</p>
+                      <p className="text-xs text-gray-500">20 domains · auto-renewal · one-time</p>
                     </div>
                     <span className="text-purple-700 font-semibold">$49</span>
                   </div>

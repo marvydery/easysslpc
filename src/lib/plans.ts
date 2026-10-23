@@ -7,7 +7,7 @@ export const PLANS = {
     name: "Free",
     price: "$0",
     period: "90 days",
-    domainLimit: 1,
+    domainLimit: 5,
     autoRenew: false,
     bridge: false,
   },
@@ -15,7 +15,7 @@ export const PLANS = {
     name: "Pro",
     price: "$29",
     period: "year",
-    domainLimit: 5,
+    domainLimit: 10,
     autoRenew: true,
     bridge: true,
   },
@@ -23,7 +23,7 @@ export const PLANS = {
     name: "Lifetime",
     price: "$49",
     period: "one-time",
-    domainLimit: 10,
+    domainLimit: 20,
     autoRenew: true,
     bridge: true,
   },
@@ -37,7 +37,7 @@ export const ADMIN_DOMAIN_LIMIT = 999_999; // effectively unlimited
  */
 export function getDomainLimit(tier: string, isAdmin: boolean): number {
   if (isAdmin) return ADMIN_DOMAIN_LIMIT;
-  return PLANS[tier as keyof typeof PLANS]?.domainLimit ?? 1;
+  return PLANS[tier as keyof typeof PLANS]?.domainLimit ?? PLANS.free.domainLimit;
 }
 
 /**

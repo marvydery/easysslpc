@@ -20,7 +20,7 @@ const PLAN_UI = [
     color: "blue",
     icon: Zap,
     features: [
-      "Up to 5 domains",
+      "Up to 10 domains",
       "Bridge file — upload once",
       "Fully automatic renewal",
       "Email + dashboard delivery",
@@ -36,7 +36,7 @@ const PLAN_UI = [
     color: "purple",
     icon: Crown,
     features: [
-      "Up to 10 domains",
+      "Up to 20 domains",
       "Bridge file — upload once",
       "Fully automatic renewal",
       "Email + dashboard delivery",
