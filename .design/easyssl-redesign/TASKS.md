@@ -20,7 +20,10 @@ Philosophy for every task: security-print document meets engineering instrument.
 - [x] **Responsive & a11y pass (landing)**: 375 / 768 / 1024 / 1280; focus rings; reduced motion; contrast in dark mode. Breakpoints: all.
 - [x] **Ship landing**: build, push live, ask the user to judge the direction.
 
-## App (after landing approval)
+## App: out of scope (2026-10-23)
+
+The user is happy with the current dashboard; the redesign covers the landing page only.
+The dashboard SSL checker page is pinned to light tokens with `.theme-light` so the shared checker matches it.
 - [ ] **App shell**: shared header (wordmark, New certificate, SSL checker, plan, sign out) on canvas background. _Modifies dashboard header._
 - [ ] **Dashboard**: stat strip, "needs attention" first, certificate table with status labels, mono dates, inline actions; viewer modal on tokens. _Modifies `DashboardTable`, `DashboardClient`, `dashboard/page.tsx`._
 - [ ] **Generate flow**: stepper with current step emphasised, file download rows, verification feedback states (checking / ok / error). _Modifies `dashboard/generate/page.tsx`._

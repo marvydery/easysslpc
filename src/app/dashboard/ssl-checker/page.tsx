@@ -4,7 +4,7 @@ import SslChecker from "@/components/SslChecker";
 
 export default function SslCheckerPage() {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="theme-light min-h-screen bg-gray-50">
       <header className="bg-white border-b">
         <div className="container mx-auto px-4 py-4 flex items-center gap-4">
           <Link href="/dashboard" className="text-gray-600 hover:text-gray-900">

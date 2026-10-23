@@ -7,8 +7,10 @@
  * Philosophy: security-print document meets engineering instrument.
  * Warm paper, near-black green ink, one deep "secure" green, hairlines over shadows.
  * Colours are space-separated RGB so Tailwind opacity modifiers work (bg-brand/10).
+ * `.theme-light` pins a subtree to light values (used inside the light-only dashboard).
  */
-:root {
+:root,
+.theme-light {
   /* Colour: backgrounds */
   --color-bg-primary: 247 245 240;      /* warm paper */
   --color-bg-secondary: 255 253 248;    /* document / card */
