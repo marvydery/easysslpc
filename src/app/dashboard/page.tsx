@@ -29,13 +29,26 @@ export default async function DashboardPage() {
     .limit(1);
 
   if (dbUser.length === 0) {
-    // Create user — auto-grant admin/lifetime if email matches ADMIN_EMAIL
-    await db.insert(users).values({
-      clerkId: userId,
-      email: userEmail,
-      subscriptionTier: isAdminEmail ? "lifetime" : "free",
-      isAdmin: isAdminEmail,
-    });
+    // Same email but a new Clerk ID (e.g. after moving Clerk from development to
+    // production): re-link the existing account so domains and plan carry over.
+    const [existingByEmail] = userEmail
+      ? await db.select().from(users).where(eq(users.email, userEmail)).limit(1)
+      : [];
+
+    if (existingByEmail) {
+      await db
+        .update(users)
+        .set({ clerkId: userId, updatedAt: new Date() })
+        .where(eq(users.id, existingByEmail.id));
+    } else {
+      // Create user — auto-grant admin/lifetime if email matches ADMIN_EMAIL
+      await db.insert(users).values({
+        clerkId: userId,
+        email: userEmail,
+        subscriptionTier: isAdminEmail ? "lifetime" : "free",
+        isAdmin: isAdminEmail,
+      });
+    }
 
     dbUser = await db
       .select()
