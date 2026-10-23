@@ -153,7 +153,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Add to `.env`:
 ```
-RENEWAL_CRON_KEY=your-cron-key-here
+CRON_SECRET=your-long-random-string
 ```
 
 ## Step 6: Deploy to Vercel
@@ -196,15 +196,13 @@ Add all variables from `.env`:
 - `EMAIL_PASSWORD`
 - `EMAIL_FROM`
 - `ENCRYPTION_KEY`
-- `RENEWAL_CRON_KEY`
+- `CRON_SECRET`
 - `ACME_DIRECTORY_URL` (use production URL)
 - `NEXT_PUBLIC_APP_URL` (your Vercel URL)
 
 ### Update Vercel Cron
 
-1. Edit `vercel.json`
-2. Replace `YOUR_RENEWAL_CRON_KEY` with your actual key
-3. Deploy again: `vercel --prod`
+No edits needed — `vercel.json` contains no secrets. Vercel sends `CRON_SECRET` automatically.
 
 ## Step 7: Configure ACME Production
 
@@ -248,7 +246,7 @@ Go to Stripe Dashboard → Webhooks:
 4. Verify bridge.php contains correct API URL
 
 ### Test Cron Job
-1. Manually trigger: `curl https://your-domain.com/api/cron/renew?key=YOUR_KEY`
+1. Manually trigger: `curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain.com/api/cron/challenge` (then `/api/cron/finalize`)
 2. Check logs for success
 3. Verify emails are sent
 

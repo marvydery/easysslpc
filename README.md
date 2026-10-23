@@ -93,7 +93,7 @@ cp .env.example .env
 - `STRIPE_LIFETIME_PRICE_ID` - Stripe price ID for Lifetime plan
 - `EMAIL_HOST`, `EMAIL_USER`, `EMAIL_PASSWORD` - Email configuration
 - `ENCRYPTION_KEY` - 32-byte hex string for AES-256 encryption
-- `RENEWAL_CRON_KEY` - Secret key for cron job endpoint
+- `CRON_SECRET` - Secret Vercel Cron sends to the renewal endpoints
 - `NEXT_PUBLIC_APP_URL` - Your app URL
 
 **Generate Encryption Key:**
@@ -156,29 +156,20 @@ Events to listen for:
 
 The renewal cron job should run daily to check for expiring certificates.
 
-### Option 1: Vercel Cron (Recommended)
+### Vercel Cron
 
-Create `vercel.json`:
+Renewal runs as two daily Vercel Cron jobs, already configured in `vercel.json`:
 
-```json
-{
-  "crons": [{
-    "path": "/api/cron/renew?key=YOUR_RENEWAL_CRON_KEY",
-    "schedule": "0 2 * * *"
-  }]
-}
+- `/api/cron/challenge` (02:00 UTC) — creates Let's Encrypt orders for auto-renew domains expiring within 30 days
+- `/api/cron/finalize` (03:00 UTC) — validates through the customer's bridge.php, issues the certificate, installs it through cPanel and emails it
+
+Set `CRON_SECRET` (any long random string) in your Vercel project. Vercel then sends
+`Authorization: Bearer <CRON_SECRET>` with every cron call, and the endpoints reject anything else.
+
+To trigger a run manually:
 ```
-
-### Option 2: External Cron Service
-
-Use services like:
-- Cron-job.org
-- EasyCron
-- GitHub Actions
-
-Make a daily GET request to:
-```
-https://your-domain.com/api/cron/renew?key=YOUR_RENEWAL_CRON_KEY
+curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain.com/api/cron/challenge
+curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain.com/api/cron/finalize
 ```
 
 ## Deployment
@@ -229,7 +220,7 @@ Use a production PostgreSQL database:
 
 ### Cron Endpoints (Requires Key)
 
-- `GET /api/cron/renew?key=CRON_KEY` - Renewal cron job
+- `GET /api/cron/challenge`, `GET /api/cron/finalize` - Renewal cron jobs (require `CRON_SECRET`)
 
 ## Pricing Tiers
 

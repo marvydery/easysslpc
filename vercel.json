@@ -1,11 +1,11 @@
 {
   "crons": [
     {
-      "path": "/api/cron/challenge?key=ba2fbbe3e6c1dda079f5e6eff73f1998",
+      "path": "/api/cron/challenge",
       "schedule": "0 2 * * *"
     },
     {
-      "path": "/api/cron/finalize?key=ba2fbbe3e6c1dda079f5e6eff73f1998",
+      "path": "/api/cron/finalize",
       "schedule": "0 3 * * *"
     }
   ]

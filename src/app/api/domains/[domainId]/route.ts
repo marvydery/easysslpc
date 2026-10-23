@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
-import { users, domains, acmeChallenges } from "@/lib/db/schema";
+import { users, domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { getPendingChallenges } from "@/lib/renewal";
 
 export async function GET(
   request: NextRequest,
@@ -34,18 +35,9 @@ export async function GET(
       return NextResponse.json({ error: "Domain not found" }, { status: 404 });
     }
 
-    // Check if www was included by looking at stored acme_challenges
-    const apexDomain = domain.domainName.startsWith("www.")
-      ? domain.domainName.slice(4)
-      : domain.domainName;
-    const wwwDomain = `www.${apexDomain}`;
-
-    const storedChallenges = await db
-      .select()
-      .from(acmeChallenges)
-      .where(eq(acmeChallenges.userId, user.id));
-
-    const includeWww = storedChallenges.some((c) => c.domain === wwwDomain);
+    // Pending verification rows for this domain tell us whether www was requested
+    const pending = await getPendingChallenges(user.id, domain);
+    const includeWww = pending.some((c) => c.domain.startsWith("www."));
 
     return NextResponse.json({
       domain,

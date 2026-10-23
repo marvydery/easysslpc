@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { users, domains, acmeChallenges } from "@/lib/db/schema";
+import { domains, acmeChallenges } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { BRIDGE_TEST_TOKEN } from "@/lib/bridge-kit";
+
+export const dynamic = "force-dynamic";
 
 /**
  * GET /api/bridge?token=TOKEN&secret=BRIDGE_SECRET
@@ -9,52 +12,46 @@ import { eq, and } from "drizzle-orm";
  * Called by bridge.php on the user's server when Let's Encrypt
  * requests the ACME challenge file during auto-renewal.
  * Returns the raw keyAuthorization string as plain text.
+ *
+ * The special token "easyssl-bridge-test" returns "easyssl-bridge-ok <domain>"
+ * so "Check Auto Renewal" can test the whole chain end to end.
  */
 export async function GET(request: NextRequest) {
   try {
-    const token  = request.nextUrl.searchParams.get("token");
+    const token = request.nextUrl.searchParams.get("token");
     const secret = request.nextUrl.searchParams.get("secret");
 
     if (!token || !secret) {
       return new NextResponse("Bad Request", { status: 400 });
     }
 
-    // Find the domain that owns this bridge secret
-    const [domainRow] = await db
-      .select({ domain: domains, user: users })
+    const [domain] = await db
+      .select()
       .from(domains)
-      .innerJoin(users, eq(domains.userId, users.id))
       .where(eq(domains.bridgeSecret, secret))
       .limit(1);
 
-    if (!domainRow) {
+    if (!domain) {
       return new NextResponse("Not Found", { status: 404 });
     }
 
-    // Look up the challenge for this token
+    const headers = { "Content-Type": "text/plain", "Cache-Control": "no-store" };
+
+    if (token === BRIDGE_TEST_TOKEN) {
+      return new NextResponse(`easyssl-bridge-ok ${domain.domainName}`, { status: 200, headers });
+    }
+
     const [challenge] = await db
       .select()
       .from(acmeChallenges)
-      .where(
-        and(
-          eq(acmeChallenges.userId, domainRow.user.id),
-          eq(acmeChallenges.token, token)
-        )
-      )
+      .where(and(eq(acmeChallenges.userId, domain.userId), eq(acmeChallenges.token, token)))
       .limit(1);
 
     if (!challenge) {
       return new NextResponse("Not Found", { status: 404 });
     }
 
-    // Return plain text key authorization — exactly what LE expects
-    return new NextResponse(challenge.keyAuthorization, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/plain",
-        "Cache-Control": "no-store",
-      },
-    });
+    return new NextResponse(challenge.keyAuthorization, { status: 200, headers });
   } catch (error: any) {
     console.error("[bridge] error:", error);
     return new NextResponse("Internal Server Error", { status: 500 });

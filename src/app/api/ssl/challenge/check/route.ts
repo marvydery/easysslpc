@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
-import { users, domains, acmeChallenges } from "@/lib/db/schema";
+import { users, domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { checkChallengeServed } from "@/lib/http-probe";
+import { getPendingChallenges } from "@/lib/renewal";
+
+export const maxDuration = 30;
 
 /**
  * POST /api/ssl/challenge/check
  * Body: { domainId: string }
  * Checks that ALL verification files for this domain (including www if applicable)
- * are accessible and contain the correct content before the user proceeds.
+ * are reachable the way Let's Encrypt will fetch them (http, following redirects,
+ * ignoring invalid certificates) and contain the correct content.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -17,113 +22,49 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { domainId } = body;
-
+    const { domainId } = await request.json();
     if (!domainId) {
       return NextResponse.json({ error: "Domain ID is required" }, { status: 400 });
     }
 
-    // Get user
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.clerkId, userId))
-      .limit(1);
-
+    const [user] = await db.select().from(users).where(eq(users.clerkId, userId)).limit(1);
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Get domain record
     const [domain] = await db
       .select()
       .from(domains)
       .where(and(eq(domains.id, domainId), eq(domains.userId, user.id)))
       .limit(1);
-
     if (!domain) {
-      return NextResponse.json(
-        { error: "Domain not found or access denied" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Domain not found or access denied" }, { status: 404 });
     }
 
-    // Load all challenge rows for this user's pending challenges
-    // (covers both apex and www if includeWww was used)
-    const storedChallenges = await db
-      .select()
-      .from(acmeChallenges)
-      .where(eq(acmeChallenges.userId, user.id));
-
-    // Filter to challenges relevant to this domain
-    const apexDomain = domain.domainName.startsWith("www.")
-      ? domain.domainName.slice(4)
-      : domain.domainName;
-    const wwwDomain = `www.${apexDomain}`;
-
-    const relevantChallenges = storedChallenges.filter(
-      (c) => c.domain === apexDomain || c.domain === wwwDomain
-    );
-
-    if (relevantChallenges.length === 0) {
+    const pending = await getPendingChallenges(user.id, domain);
+    if (pending.length === 0) {
       return NextResponse.json(
         { error: "No pending challenge found. Please restart the verification process." },
         { status: 400 }
       );
     }
 
-    // Check every challenge file
-    const results: Array<{ domain: string; ok: boolean; error?: string }> = [];
-
-    for (const ch of relevantChallenges) {
-      const url = `http://${ch.domain}/.well-known/acme-challenge/${ch.token}`;
-
-      try {
-        const response = await fetch(url, {
-          method: "GET",
-          headers: { "User-Agent": "EasySSL-Verification/1.0" },
-          redirect: "follow",
-        });
-
-        if (!response.ok) {
-          results.push({
-            domain: ch.domain,
-            ok: false,
-            error: `File not accessible (HTTP ${response.status}). Make sure it's uploaded to public_html/.well-known/acme-challenge/`,
-          });
-          continue;
-        }
-
-        const content = await response.text();
-
-        if (!content.trim().startsWith(ch.keyAuthorization.trim())) {
-          results.push({
-            domain: ch.domain,
-            ok: false,
-            error: `File content doesn't match. Re-download and re-upload the verification file for ${ch.domain}.`,
-          });
-          continue;
-        }
-
-        results.push({ domain: ch.domain, ok: true });
-      } catch (err: any) {
-        results.push({
-          domain: ch.domain,
-          ok: false,
-          error: `Cannot reach ${url}. Make sure your domain points to your server. (${err.message})`,
-        });
-      }
-    }
+    const results = await Promise.all(
+      pending.map(async (ch) => {
+        const served = await checkChallengeServed(ch.domain, ch.token, ch.keyAuthorization);
+        if (served.ok) return { domain: ch.domain, ok: true };
+        const error =
+          served.reason === "file content does not match"
+            ? `File content doesn't match. Re-download and re-upload the verification file for ${ch.domain}.`
+            : `${served.url} — ${served.reason}. Make sure the file is uploaded to public_html/.well-known/acme-challenge/ and the domain points to your server.`;
+        return { domain: ch.domain, ok: false, error };
+      })
+    );
 
     const failed = results.filter((r) => !r.ok);
-
     if (failed.length > 0) {
       return NextResponse.json(
-        {
-          error: "One or more verification files are not accessible.",
-          details: failed,
-        },
+        { error: "One or more verification files are not accessible.", details: failed },
         { status: 400 }
       );
     }
@@ -137,9 +78,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error("Challenge check error:", error);
-    return NextResponse.json(
-      { error: error.message || "Verification check failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message || "Verification check failed" }, { status: 500 });
   }
 }

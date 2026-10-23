@@ -1,228 +1,120 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
-import { encrypt } from "@/lib/crypto";
-import { eq, and } from "drizzle-orm";
-import * as acme from "acme-client";
-import JSZip from "jszip";
-import {
-  sendCertificateEmail,
-  sendBridgeFailureWarning,
-  sendAdminRenewalSuccess,
-  sendAdminRenewalFailure,
-} from "@/lib/email";
-import * as https from "https";
-import * as http from "http";
+import { users, domains, acmeChallenges, type AcmeChallenge } from "@/lib/db/schema";
+import { eq, and, inArray } from "drizzle-orm";
+import { apexOf } from "@/lib/acme";
+import { isAuthorizedCron } from "@/lib/cron-auth";
+import { finalizeRenewal, isStale } from "@/lib/renewal";
+import { sendBridgeFailureWarning, sendAdminRenewalFailure } from "@/lib/email";
 
-const ACME_DIRECTORY_URL =
-  process.env.ACME_DIRECTORY_URL ||
-  "https://acme-v02.api.letsencrypt.org/directory";
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-function parseCertChain(chain: string): { certificate: string; caCertificate: string } {
-  const blocks =
-    chain.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
-  if (blocks.length === 0) return { certificate: chain.trim(), caCertificate: "" };
-  return {
-    certificate: blocks[0] as string,
-    caCertificate: blocks.slice(1).join("\n"),
-  };
-}
+const TIME_BUDGET_MS = 40_000;
+/** Give customers a few minutes between order creation and finalization. */
+const MIN_AGE_MS = 5 * 60 * 1000;
 
 /**
- * Checks bridge by trying https (ignoring expired cert) then falling back to http.
- * This handles sites that force HTTP→HTTPS redirect even with an expired cert.
- */
-async function checkBridge(domain: string, token: string, keyAuthorization: string): Promise<{ ok: boolean; url: string }> {
-  function tryUrl(url: string, ignoreSSL = false): Promise<boolean> {
-    return new Promise((resolve) => {
-      const isHttps = url.startsWith("https");
-      const requester = isHttps ? https : http;
-      const options: any = {
-        timeout: 5000,
-        headers: { "User-Agent": "EasySSL-Cron/1.0" },
-      };
-      if (isHttps) options.rejectUnauthorized = false; // allow expired certs
-
-      const req = (requester as any).get(url, options, (res: any) => {
-        let data = "";
-        res.on("data", (chunk: any) => (data += chunk));
-        res.on("end", () => resolve(data.trim() === keyAuthorization.trim()));
-      });
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => { req.destroy(); resolve(false); });
-    });
-  }
-
-  // Try bridge.php directly first (handles sites with HTTP→HTTPS redirects)
-  const bridgeHttps = `https://${domain}/.well-known/acme-challenge/bridge.php?token=${token}`;
-  if (await tryUrl(bridgeHttps)) return { ok: true, url: bridgeHttps };
-
-  const bridgeHttp = `http://${domain}/.well-known/acme-challenge/bridge.php?token=${token}`;
-  if (await tryUrl(bridgeHttp)) return { ok: true, url: bridgeHttp };
-
-  // Fall back to direct token URL (for non-bridge setups)
-  const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
-  if (await tryUrl(httpsUrl)) return { ok: true, url: httpsUrl };
-
-  const httpUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
-  if (await tryUrl(httpUrl)) return { ok: true, url: httpUrl };
-
-  return { ok: false, url: bridgeHttps };
-}
-
-/**
- * GET /api/cron/finalize?key=RENEWAL_CRON_KEY
+ * GET /api/cron/finalize  (Vercel Cron, daily 03:00 UTC)
  *
- * Phase 2 — Finalize pending ACME challenges that are at least 5 minutes old.
- * Verifies bridge.php is serving the token, then completes Let's Encrypt
- * validation and issues the new certificate.
- *
- * Run daily at 3:00 AM UTC (1 hour after challenge cron at 2:00 AM).
- *
- * Notifications:
- * - Customer: gets new cert ZIP on success, bridge warning on failure (≤5 days left)
- * - Admin (jocykwa2015@gmail.com): gets notified on every success AND every failure
+ * Phase 2 — for each pending renewal order, confirm bridge.php serves the
+ * tokens, then let Let's Encrypt validate, issue the cert, install it via
+ * bridge.php and email the customer.
  */
 export async function GET(request: NextRequest) {
+  if (!isAuthorizedCron(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const started = Date.now();
   try {
-    const cronKey = request.nextUrl.searchParams.get("key");
-    if (cronKey !== process.env.RENEWAL_CRON_KEY) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const rows = await db
+      .select({ challenge: acmeChallenges, user: users })
+      .from(acmeChallenges)
+      .innerJoin(users, eq(acmeChallenges.userId, users.id));
+
+    // One Let's Encrypt order can cover apex + www → group rows by order
+    const groups = new Map<string, { user: typeof users.$inferSelect; rows: AcmeChallenge[] }>();
+    for (const { challenge, user } of rows) {
+      const g = groups.get(challenge.orderUrl) ?? { user, rows: [] };
+      g.rows.push(challenge);
+      groups.set(challenge.orderUrl, g);
     }
 
-    const today = new Date();
-    const results: any[] = [];
+    const results: Array<Record<string, unknown>> = [];
 
-    const pendingChallenges = await db
-      .select({ challenge: acmeChallenges, domain: domains, user: users })
-      .from(acmeChallenges)
-      .innerJoin(
-        domains,
-        and(
-          eq(acmeChallenges.userId, domains.userId),
-          eq(acmeChallenges.domain, domains.domainName)
-        )
-      )
-      .innerJoin(users, eq(domains.userId, users.id))
-      .where(eq(domains.autoRenewEnabled, true));
+    for (const { user, rows: group } of Array.from(groups.values())) {
+      const names = group.map((r) => r.domain);
+      const label = names.join(", ");
 
-    for (const { challenge, domain, user } of pendingChallenges) {
-      const challengeAgeMinutes =
-        (today.getTime() - new Date(challenge.createdAt).getTime()) / 1000 / 60;
-      if (challengeAgeMinutes < 5) {
-        results.push({ domain: domain.domainName, status: "too_fresh" });
+      // Expired orders (or abandoned manual attempts) are useless — clear them
+      if (isStale(group)) {
+        await db.delete(acmeChallenges).where(inArray(acmeChallenges.id, group.map((r) => r.id)));
+        results.push({ domain: label, status: "stale_cleared" });
+        continue;
+      }
+      if (group.some((r) => Date.now() - new Date(r.createdAt).getTime() < MIN_AGE_MS)) {
+        results.push({ domain: label, status: "too_fresh" });
+        continue;
+      }
+      if (Date.now() - started > TIME_BUDGET_MS) {
+        results.push({ domain: label, status: "deferred" });
+        continue;
+      }
+
+      const lookup = Array.from(new Set(names.flatMap((n) => [n, apexOf(n)])));
+      const [domain] = await db
+        .select()
+        .from(domains)
+        .where(and(eq(domains.userId, user.id), inArray(domains.domainName, lookup)))
+        .limit(1);
+
+      // Only auto-renew domains with a bridge are finalized here; manual
+      // generations in progress are left for the customer to finish.
+      if (!domain || !domain.autoRenewEnabled || !domain.bridgeSecret) {
+        results.push({ domain: label, status: "skipped_manual" });
         continue;
       }
 
       try {
-        console.log(`[cron/finalize] Finalizing renewal for ${domain.domainName}`);
+        const result = await finalizeRenewal(user, domain, group);
 
-        const { ok: bridgeOk, url: verifyUrl } = await checkBridge(
-          challenge.domain,
-          challenge.token,
-          challenge.keyAuthorization
-        );
-
-        if (!bridgeOk) {
-          const daysUntilExpiry = domain.nextRenewalDate
-            ? Math.round(
-                (new Date(domain.nextRenewalDate).getTime() - today.getTime()) /
-                  1000 / 60 / 60 / 24
-              )
+        if (result.status === "bridge_not_ready") {
+          const daysLeft = domain.nextRenewalDate
+            ? Math.round((new Date(domain.nextRenewalDate).getTime() - Date.now()) / 86_400_000)
             : null;
-
-          console.warn(
-            `[cron/finalize] Bridge not ready for ${domain.domainName} (${daysUntilExpiry}d left)`
-          );
-
-          if (daysUntilExpiry !== null && daysUntilExpiry <= 5) {
-            await sendBridgeFailureWarning(
-              user.email,
-              domain.domainName,
-              daysUntilExpiry,
-              verifyUrl
-            );
+          if (daysLeft !== null && daysLeft <= 7) {
+            await sendBridgeFailureWarning(user.email, domain.domainName, daysLeft, result.url);
           }
-
-          results.push({ domain: domain.domainName, status: "bridge_not_ready", daysUntilExpiry });
-          continue;
+          results.push({ domain: label, status: "bridge_not_ready", reason: result.reason, daysLeft });
+        } else if (result.status === "order_invalid") {
+          // Rows were cleared; tomorrow's challenge cron starts a fresh order
+          await sendAdminRenewalFailure(user.email, domain.domainName, result.message);
+          results.push({ domain: label, status: "failed", error: result.message });
+        } else {
+          results.push({
+            domain: label,
+            status: "renewed",
+            expiryDate: result.expiryDate,
+            installed: result.install?.installed ?? false,
+            installMessage: result.install?.message,
+          });
         }
-
-        const client = new acme.Client({
-          directoryUrl: ACME_DIRECTORY_URL,
-          accountKey: challenge.accountKeyPem,
-          backoffAttempts: 5,
-          backoffMin: 2000,
-          backoffMax: 8000,
-        });
-
-        await client.createAccount({
-          termsOfServiceAgreed: true,
-          contact: [`mailto:${user.email}`],
-        });
-
-        const order = await client.getOrder({ url: challenge.orderUrl } as acme.Order);
-        const authorizations = await client.getAuthorizations(order);
-
-        for (const authz of authorizations) {
-          const ch = authz.challenges.find((c: any) => c.type === "http-01");
-          if (!ch) throw new Error(`No HTTP-01 challenge for ${authz.identifier.value}`);
-          await client.completeChallenge(ch);
-          await client.waitForValidStatus(ch);
-        }
-
-        const csrBuffer = Buffer.from(challenge.csrDer, "base64");
-        await client.finalizeOrder(order, csrBuffer);
-        const certChain = await client.getCertificate(order);
-
-        const { certificate, caCertificate } = parseCertChain(certChain);
-        const expiryDate = new Date();
-        expiryDate.setDate(expiryDate.getDate() + 90);
-
-        await db.insert(certificates).values({
-          domainId: domain.id,
-          crtBody: certificate,
-          keyBodyEncrypted: encrypt(challenge.csrKeyPem),
-          caBundle: caCertificate || null,
-          expiryDate,
-        });
-
-        await db
-          .update(domains)
-          .set({ nextRenewalDate: expiryDate, updatedAt: new Date() })
-          .where(eq(domains.id, domain.id));
-
-        await db.delete(acmeChallenges).where(eq(acmeChallenges.id, challenge.id));
-
-        const zip = new JSZip();
-        zip.file(`${domain.domainName}.crt`, certificate);
-        zip.file(`${domain.domainName}.key`, challenge.csrKeyPem);
-        if (caCertificate) zip.file(`${domain.domainName}-ca-bundle.crt`, caCertificate);
-        zip.file(
-          "README.txt",
-          `Renewed SSL Certificate\nDomain: ${domain.domainName}\nExpires: ${expiryDate.toLocaleDateString()}\n`
-        );
-        const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
-
-        await sendCertificateEmail(user.email, domain.domainName, zipBuffer);
-        await sendAdminRenewalSuccess(user.email, domain.domainName, expiryDate);
-
-        results.push({ domain: domain.domainName, status: "renewed", expiryDate });
-        console.log(`[cron/finalize] Successfully renewed ${domain.domainName}`);
       } catch (err: any) {
-        console.error(`[cron/finalize] Failed for ${domain.domainName}:`, err);
+        console.error(`[cron/finalize] Failed for ${label}:`, err);
         await sendAdminRenewalFailure(user.email, domain.domainName, err.message);
-        results.push({ domain: domain.domainName, status: "failed", error: err.message });
+        results.push({ domain: label, status: "failed", error: err.message });
       }
     }
 
+    const tally = (s: string) => results.filter((r) => r.status === s).length;
     return NextResponse.json({
       success: true,
-      timestamp: today.toISOString(),
-      renewed: results.filter((r) => r.status === "renewed").length,
-      bridge_not_ready: results.filter((r) => r.status === "bridge_not_ready").length,
-      too_fresh: results.filter((r) => r.status === "too_fresh").length,
-      failed: results.filter((r) => r.status === "failed").length,
+      timestamp: new Date().toISOString(),
+      renewed: tally("renewed"),
+      bridge_not_ready: tally("bridge_not_ready"),
+      failed: tally("failed"),
+      deferred: tally("deferred"),
       results,
     });
   } catch (error: any) {

@@ -15,21 +15,27 @@ const ADMIN_EMAIL = "jocykwa2015@gmail.com";
 export async function sendCertificateEmail(
   to: string,
   domain: string,
-  certificateZipBuffer: Buffer
+  certificateZipBuffer: Buffer,
+  opts: { renewal?: boolean; installed?: boolean } = {}
 ) {
+  const installLine = opts.installed
+    ? "It has already been installed on your server automatically — no action is needed. The ZIP attached is your backup copy."
+    : "The certificate is attached to this email as a ZIP file. Please install it in your hosting control panel (cPanel → SSL/TLS → Manage SSL sites).";
   try {
     await transporter.sendMail({
       from: process.env.EMAIL_FROM,
       to,
-      subject: `SSL Certificate Ready for ${domain}`,
+      subject: opts.renewal
+        ? `SSL Certificate Renewed for ${domain}`
+        : `SSL Certificate Ready for ${domain}`,
       html: `
-        <h2>Your SSL Certificate is Ready!</h2>
-        <p>Your SSL certificate for <strong>${domain}</strong> has been generated successfully.</p>
-        <p>The certificate is attached to this email as a ZIP file. Please download and install it on your server.</p>
-        <p>The certificate will expire in 90 days. ${
-          domain.includes("bridge")
-            ? "Don't worry - we'll automatically renew it for you!"
-            : "Please renew it manually before expiration."
+        <h2>${opts.renewal ? "Your SSL Certificate Was Renewed" : "Your SSL Certificate is Ready!"}</h2>
+        <p>Your SSL certificate for <strong>${domain}</strong> has been ${opts.renewal ? "renewed" : "generated"} successfully.</p>
+        <p>${installLine}</p>
+        <p>The certificate is valid for 90 days. ${
+          opts.renewal
+            ? "We will renew it again automatically before it expires."
+            : "Remember to renew it before it expires."
         }</p>
         <br>
         <p>Best regards,<br>EasySSL Team</p>

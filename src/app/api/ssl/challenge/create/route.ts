@@ -2,14 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { users, domains, acmeChallenges } from "@/lib/db/schema";
-import { eq, count, and, inArray } from "drizzle-orm";
+import { eq, count, and } from "drizzle-orm";
+import { clearPendingChallenges } from "@/lib/renewal";
 import { getDomainLimit } from "@/lib/plans";
-import { buildDomainList } from "@/lib/acme";
+import { ACME_DIRECTORY_URL, buildDomainList } from "@/lib/acme";
 import * as acme from "acme-client";
 
-const ACME_DIRECTORY_URL =
-  process.env.ACME_DIRECTORY_URL ||
-  "https://acme-v02.api.letsencrypt.org/directory";
+export const maxDuration = 30;
 
 /**
  * POST /api/ssl/challenge/create
@@ -108,15 +107,8 @@ export async function POST(request: NextRequest) {
       domainRecord = created;
     }
 
-    // Clear stale challenge rows
-    await db
-      .delete(acmeChallenges)
-      .where(
-        and(
-          eq(acmeChallenges.userId, user.id),
-          inArray(acmeChallenges.domain, domainList)
-        )
-      );
+    // Clear stale challenge rows (apex and www) from any earlier attempt
+    await clearPendingChallenges(user.id, domainRecord);
 
     // Persist challenge rows — one per domain
     const challenges: Array<{

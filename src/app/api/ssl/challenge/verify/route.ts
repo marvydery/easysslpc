@@ -1,59 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
-import { users, domains, certificates, acmeChallenges } from "@/lib/db/schema";
+import { users, domains, certificates } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import * as acme from "acme-client";
-import * as https from "https";
-import * as http from "http";
 import { encrypt } from "@/lib/crypto";
+import { ACME_DIRECTORY_URL, apexOf, getCertExpiry, parseCertChain } from "@/lib/acme";
+import { checkChallengeServed } from "@/lib/http-probe";
+import { clearPendingChallenges, getPendingChallenges } from "@/lib/renewal";
 import JSZip from "jszip";
 
-const ACME_DIRECTORY_URL =
-  process.env.ACME_DIRECTORY_URL ||
-  "https://acme-v02.api.letsencrypt.org/directory";
-
-function parseCertChain(chain: string): { certificate: string; caCertificate: string } {
-  const blocks =
-    chain.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
-  if (blocks.length === 0) return { certificate: chain.trim(), caCertificate: "" };
-  return {
-    certificate: blocks[0] as string,
-    caCertificate: blocks.slice(1).join("\n"),
-  };
-}
-
-// Tries https (ignoring expired cert) then falls back to http
-function fetchToken(domain: string, token: string): Promise<{ ok: boolean; content: string; url: string }> {
-  function tryUrl(url: string): Promise<{ ok: boolean; content: string }> {
-    return new Promise((resolve) => {
-      const isHttps = url.startsWith("https");
-      const requester = isHttps ? https : http;
-      const options: any = { timeout: 8000, headers: { "User-Agent": "EasySSL/1.0" } };
-      if (isHttps) options.rejectUnauthorized = false;
-
-      const req = (requester as any).get(url, options, (res: any) => {
-        let data = "";
-        res.on("data", (c: any) => (data += c));
-        res.on("end", () => resolve({ ok: res.statusCode === 200, content: data }));
-      });
-      req.on("error", () => resolve({ ok: false, content: "" }));
-      req.on("timeout", () => { req.destroy(); resolve({ ok: false, content: "" }); });
-    });
-  }
-
-  return (async () => {
-    const httpsUrl = `https://${domain}/.well-known/acme-challenge/${token}`;
-    const httpsResult = await tryUrl(httpsUrl);
-    if (httpsResult.ok) return { ...httpsResult, url: httpsUrl };
-
-    const httpUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
-    const httpResult = await tryUrl(httpUrl);
-    if (httpResult.ok) return { ...httpResult, url: httpUrl };
-
-    return { ok: false, content: "", url: httpsUrl };
-  })();
-}
+// Let's Encrypt validation + issuance usually takes 5–30 seconds
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,9 +20,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { domainId, email } = body;
-
+    const { domainId, email } = await request.json();
     if (!domainId || !email) {
       return NextResponse.json({ error: "Domain ID and email are required" }, { status: 400 });
     }
@@ -79,55 +35,35 @@ export async function POST(request: NextRequest) {
       .limit(1);
     if (!domain) return NextResponse.json({ error: "Domain not found" }, { status: 404 });
 
-    const apexDomain = domain.domainName.startsWith("www.")
-      ? domain.domainName.slice(4)
-      : domain.domainName;
-    const wwwDomain = `www.${apexDomain}`;
-
-    const allChallenges = await db
-      .select()
-      .from(acmeChallenges)
-      .where(eq(acmeChallenges.userId, user.id));
-
-    const storedChallenges = allChallenges.filter(
-      (c) => c.domain === apexDomain || c.domain === wwwDomain
-    );
-
-    if (storedChallenges.length === 0) {
+    const apexDomain = apexOf(domain.domainName);
+    const stored = await getPendingChallenges(user.id, domain);
+    if (stored.length === 0) {
       return NextResponse.json(
         { error: "No pending challenge found. Please restart the verification process." },
         { status: 400 }
       );
     }
 
-    const { accountKeyPem, csrKeyPem, csrDer, orderUrl } = storedChallenges[0];
-    const domainList = storedChallenges.map((c) => c.domain);
-    const csrBuffer = Buffer.from(csrDer, "base64");
-
-    // Step 1: Verify all uploaded files — tries https (ignoring expired cert) then http
-    for (const stored of storedChallenges) {
-      const { ok, content, url } = await fetchToken(stored.domain, stored.token);
-
-      if (!ok) {
+    // Step 1: Confirm every file is reachable exactly as Let's Encrypt will fetch it
+    for (const ch of stored) {
+      const served = await checkChallengeServed(ch.domain, ch.token, ch.keyAuthorization);
+      if (!served.ok) {
         return NextResponse.json(
           {
-            error: `${stored.domain}: Cannot reach ${url}. Make sure your domain points to your server. (fetch failed)`,
-          },
-          { status: 400 }
-        );
-      }
-
-      if (content.trim() !== stored.keyAuthorization.trim()) {
-        return NextResponse.json(
-          {
-            error: `File content mismatch for ${stored.domain}. Re-download and re-upload the verification file.`,
+            error:
+              served.reason === "file content does not match"
+                ? `File content mismatch for ${ch.domain}. Re-download and re-upload the verification file.`
+                : `${ch.domain}: cannot reach ${served.url} (${served.reason}). Make sure your domain points to your server.`,
           },
           { status: 400 }
         );
       }
     }
 
-    // Step 2: Rebuild client with the SAME account key used to create the order
+    const { accountKeyPem, csrKeyPem, csrDer, orderUrl } = stored[0];
+    const domainList = stored.map((c) => c.domain);
+
+    // Step 2: Resume the exact order the user uploaded files for, with the same account key
     const client = new acme.Client({
       directoryUrl: ACME_DIRECTORY_URL,
       accountKey: accountKeyPem,
@@ -136,35 +72,40 @@ export async function POST(request: NextRequest) {
       backoffMax: 10000,
     });
 
-    await client.createAccount({
-      termsOfServiceAgreed: true,
-      contact: [`mailto:${email}`],
-    });
+    let certChain: string;
+    try {
+      await client.createAccount({ termsOfServiceAgreed: true, contact: [`mailto:${email}`] });
+      let order = await client.getOrder({ url: orderUrl } as acme.Order);
+      if (order.status === "invalid") throw new Error("This verification attempt has expired");
 
-    // Step 3: Resume the EXACT existing order (same tokens the user uploaded)
-    const order = await client.getOrder({ url: orderUrl } as acme.Order);
-    const authorizations = await client.getAuthorizations(order);
-
-    // Step 4: Complete each challenge
-    for (const authz of authorizations) {
-      const challenge = authz.challenges.find((c: any) => c.type === "http-01");
-      if (!challenge) {
-        return NextResponse.json(
-          { error: `No HTTP-01 challenge for ${authz.identifier.value}` },
-          { status: 400 }
-        );
+      const authorizations = await client.getAuthorizations(order);
+      for (const authz of authorizations) {
+        if (authz.status === "valid") continue;
+        const challenge = authz.challenges.find((c) => c.type === "http-01");
+        if (!challenge) throw new Error(`No HTTP-01 challenge for ${authz.identifier.value}`);
+        await client.completeChallenge(challenge);
+        await client.waitForValidStatus(challenge);
       }
-      await client.completeChallenge(challenge);
-      await client.waitForValidStatus(challenge);
+
+      if (order.status !== "valid") {
+        order = await client.finalizeOrder(order, Buffer.from(csrDer, "base64"));
+      }
+      certChain = await client.getCertificate(order);
+    } catch (err: any) {
+      // A failed order can never succeed — clear it so the user starts fresh
+      await clearPendingChallenges(user.id, domain);
+      return NextResponse.json(
+        {
+          error: `Let's Encrypt could not validate your domain: ${err.message}. Please start again from Step 1 to get new verification files.`,
+          restart: true,
+        },
+        { status: 400 }
+      );
     }
 
-    // Step 5: Finalize order and get certificate
-    await client.finalizeOrder(order, csrBuffer);
-    const certChain = await client.getCertificate(order);
-
+    // Step 3: Store the certificate
     const { certificate, caCertificate } = parseCertChain(certChain);
-    const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 90);
+    const expiryDate = getCertExpiry(certificate);
 
     await db.insert(certificates).values({
       domainId: domain.id,
@@ -179,7 +120,7 @@ export async function POST(request: NextRequest) {
       .set({ challengeToken: null, challengeValue: null, nextRenewalDate: expiryDate, updatedAt: new Date() })
       .where(eq(domains.id, domain.id));
 
-    await db.delete(acmeChallenges).where(eq(acmeChallenges.userId, user.id));
+    await clearPendingChallenges(user.id, domain);
 
     const zip = new JSZip();
     zip.file(`${apexDomain}.crt`, certificate);
@@ -188,7 +129,7 @@ export async function POST(request: NextRequest) {
     const coveredDomains = domainList.join(", ");
     zip.file(
       "README.txt",
-      `SSL Certificate for ${apexDomain}\nDomains: ${coveredDomains}\nExpires: ${expiryDate.toLocaleDateString()}\n`
+      `SSL Certificate for ${apexDomain}\nDomains: ${coveredDomains}\nExpires: ${expiryDate.toUTCString()}\n`
     );
 
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
@@ -203,9 +144,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error("Challenge verify error:", error);
-    return NextResponse.json(
-      { error: error.message || "Certificate issuance failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message || "Certificate issuance failed" }, { status: 500 });
   }
 }

@@ -3,17 +3,80 @@ import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { users, domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { apexOf } from "@/lib/acme";
+import { BRIDGE_TEST_TOKEN, BRIDGE_VERSION } from "@/lib/bridge-kit";
+import { probeUrl } from "@/lib/http-probe";
+import { getRenewalDomainList } from "@/lib/renewal";
+
+export const maxDuration = 30;
+
+type Check = { label: string; status: "pass" | "fail" | "warn"; message: string };
 
 /**
- * GET /api/bridge/check?domainId=XXX
- * Checks that the bridge is correctly installed on the user's server.
- * Tests:
- * 1. Domain has autoRenewEnabled = true
- * 2. Domain has a bridgeSecret set
- * 3. bridge.php is reachable at the correct URL
- * 4. bridge.php correctly proxies requests to EasySSL
- * 5. Renewal date is set
+ * Tests the full path Let's Encrypt uses:
+ * http://<host>/.well-known/acme-challenge/<token> → .htaccess → bridge.php → /api/bridge
+ * When it fails, probes bridge.php directly to pinpoint which piece is broken.
  */
+async function testBridgeChain(host: string, domainName: string): Promise<Check> {
+  const base = `http://${host}/.well-known/acme-challenge`;
+  const expected = `easyssl-bridge-ok ${domainName}`;
+
+  const viaRewrite = await probeUrl(`${base}/${BRIDGE_TEST_TOKEN}`);
+  if (viaRewrite.ok && viaRewrite.content.trim() === expected) {
+    return { label: `Bridge working (${host})`, status: "pass", message: "Let's Encrypt can reach your bridge and it answers correctly." };
+  }
+
+  const direct = await probeUrl(`${base}/bridge.php?token=${BRIDGE_TEST_TOKEN}`);
+  let message: string;
+  if (direct.ok && direct.content.trim() === expected) {
+    message = `bridge.php works, but the .htaccess rewrite is not active. Upload .htaccess to public_html/.well-known/acme-challenge/ (and make sure mod_rewrite is enabled).`;
+  } else if (direct.ok && direct.content.trim().startsWith("easyssl-bridge-ok")) {
+    message = `This bridge.php belongs to a different domain. Download bridge.php for ${domainName} again and re-upload it.`;
+  } else if (direct.status === 404 && direct.content.trim() === "Not Found") {
+    message = `bridge.php is installed but cannot reach EasySSL, or its secret is out of date. Download a fresh bridge.php and re-upload it.`;
+  } else if (direct.status === 404) {
+    message = `bridge.php was not found at ${base}/bridge.php. Upload it to public_html/.well-known/acme-challenge/.`;
+  } else if (direct.status === 0) {
+    message = `Could not connect to ${host} (${direct.error}). Check that the domain points to your hosting server.`;
+  } else {
+    message = `bridge.php returned an unexpected response (HTTP ${direct.status}). Make sure PHP is enabled for this folder.`;
+  }
+  return { label: `Bridge working (${host})`, status: "fail", message };
+}
+
+async function testAutoInstall(host: string): Promise<Check> {
+  const res = await probeUrl(`http://${host}/.well-known/acme-challenge/bridge.php?action=info`);
+  let info: any = null;
+  try {
+    info = JSON.parse(res.content);
+  } catch {
+    /* older bridge.php */
+  }
+
+  if (!info || typeof info.version !== "number") {
+    return {
+      label: "Automatic installation",
+      status: "warn",
+      message: `Your bridge.php is an older version. Download the new bridge.php (v${BRIDGE_VERSION}) so renewed certificates are installed automatically.`,
+    };
+  }
+  if (info.uapi || info.api_token) {
+    return {
+      label: "Automatic installation",
+      status: "pass",
+      message: info.uapi
+        ? "Renewed certificates will be installed automatically through cPanel."
+        : "Renewed certificates will be installed automatically using your cPanel API token.",
+    };
+  }
+  return {
+    label: "Automatic installation",
+    status: "warn",
+    message:
+      "Your host doesn't let PHP run cPanel's installer. Renewals still happen and are emailed to you. To install them automatically, create a cPanel API token (Security → Manage API Tokens) and paste it into bridge.php.",
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { userId } = auth();
@@ -36,22 +99,17 @@ export async function GET(request: NextRequest) {
       .limit(1);
     if (!domain) return NextResponse.json({ error: "Domain not found" }, { status: 404 });
 
-    const checks: Array<{
-      label: string;
-      status: "pass" | "fail" | "warn";
-      message: string;
-    }> = [];
+    const apexDomain = apexOf(domain.domainName);
+    const checks: Check[] = [];
 
-    // Check 1: Auto-renew enabled
     checks.push({
       label: "Auto-Renewal Enabled",
       status: domain.autoRenewEnabled ? "pass" : "fail",
       message: domain.autoRenewEnabled
         ? "Auto-renewal is enabled for this domain"
-        : "Auto-renewal is not enabled. Regenerate your certificate with Bridge enabled.",
+        : "Auto-renewal is not enabled. Download bridge.php to enable it.",
     });
 
-    // Check 2: Bridge secret exists
     checks.push({
       label: "Bridge Secret",
       status: domain.bridgeSecret ? "pass" : "fail",
@@ -60,79 +118,24 @@ export async function GET(request: NextRequest) {
         : "No bridge secret found. Download bridge.php to generate one.",
     });
 
-    // Check 3: Renewal date set
     checks.push({
       label: "Renewal Date",
       status: domain.nextRenewalDate ? "pass" : "fail",
       message: domain.nextRenewalDate
-        ? `Certificate renews around ${new Date(domain.nextRenewalDate).toLocaleDateString()}`
-        : "No renewal date set. Generate a certificate first.",
+        ? `Certificate expires ${new Date(domain.nextRenewalDate).toDateString()}. Renewal starts 30 days before that.`
+        : "No certificate yet. Generate a certificate first.",
     });
 
-    // Check 4: bridge.php reachable on server
-    const apexDomain = domain.domainName.startsWith("www.")
-      ? domain.domainName.slice(4)
-      : domain.domainName;
+    if (domain.bridgeSecret) {
+      // Every name on the certificate must route through the bridge (e.g. apex + www)
+      const hosts = await getRenewalDomainList(domain);
+      const chainChecks = await Promise.all(hosts.map((h) => testBridgeChain(h, domain.domainName)));
+      checks.push(...chainChecks);
 
-    const bridgeUrl = `http://${apexDomain}/.well-known/acme-challenge/bridge.php`;
-    let bridgeReachable = false;
-    let bridgeMessage = "";
-
-    try {
-      const res = await fetch(`${bridgeUrl}?token=easyssl-test&secret=test`, {
-        headers: { "User-Agent": "EasySSL-Check/1.0" },
-        signal: AbortSignal.timeout(8000),
-      });
-      // We expect a 404 (token not found) — that means bridge.php IS running
-      // A 200 would mean bridge.php found a real token (unlikely for test)
-      // Anything other than a connection error means the file exists
-      bridgeReachable = true;
-      bridgeMessage = "bridge.php is installed and reachable on your server";
-    } catch {
-      bridgeReachable = false;
-      bridgeMessage = `Could not reach ${bridgeUrl}. Make sure bridge.php is uploaded to public_html/.well-known/acme-challenge/`;
-    }
-
-    checks.push({
-      label: "bridge.php Reachable",
-      status: bridgeReachable ? "pass" : "fail",
-      message: bridgeMessage,
-    });
-
-    // Check 5: .htaccess routing works — test that a token URL routes through bridge.php
-    // We do this by hitting /.well-known/acme-challenge/easyssl-routing-test
-    // If it returns anything other than a static file 404, routing is working
-    let htaccessOk = false;
-    let htaccessMessage = "";
-
-    if (bridgeReachable) {
-      try {
-        const testUrl = `http://${apexDomain}/.well-known/acme-challenge/easyssl-routing-test`;
-        const res = await fetch(testUrl, {
-          headers: { "User-Agent": "EasySSL-Check/1.0" },
-          signal: AbortSignal.timeout(8000),
-        });
-        // If we get any response (even 404 from bridge.php), routing is working
-        // A raw Apache 404 page would be much larger — bridge.php returns "Not Found" plaintext
-        const text = await res.text();
-        htaccessOk = text.trim() === "Not Found" || res.status === 404;
-        htaccessMessage = htaccessOk
-          ? ".htaccess routing is working correctly"
-          : ".htaccess may not be configured correctly. Re-upload the .htaccess file.";
-      } catch {
-        htaccessOk = false;
-        htaccessMessage = "Could not test .htaccess routing. Make sure .htaccess is uploaded.";
+      if (chainChecks.some((c) => c.status === "pass")) {
+        checks.push(await testAutoInstall(apexDomain));
       }
-    } else {
-      htaccessOk = false;
-      htaccessMessage = "Cannot check .htaccess until bridge.php is reachable.";
     }
-
-    checks.push({
-      label: ".htaccess Routing",
-      status: htaccessOk ? "pass" : bridgeReachable ? "fail" : "warn",
-      message: htaccessMessage,
-    });
 
     const allPassed = checks.every((c) => c.status === "pass");
     const anyFailed = checks.some((c) => c.status === "fail");
@@ -144,10 +147,10 @@ export async function GET(request: NextRequest) {
       anyFailed,
       checks,
       summary: allPassed
-        ? "Everything is set up correctly. Your certificate will renew automatically."
+        ? "Everything is set up correctly. Your certificate will renew and install automatically."
         : anyFailed
         ? "Some checks failed. Please fix the issues above."
-        : "Setup is mostly complete with minor warnings.",
+        : "Renewal will work. See the note above about automatic installation.",
     });
   } catch (error: any) {
     console.error("[bridge/check] error:", error);
