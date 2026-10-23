@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
 import {
   Lock,
   ArrowLeft,
@@ -197,9 +196,9 @@ export default function GeneratePage() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b">
         <div className="container mx-auto px-4 py-4 flex items-center gap-4">
-          <Link href="/dashboard" className="text-gray-600 hover:text-gray-900">
+          <a href="/dashboard" className="text-gray-600 hover:text-gray-900">
             <ArrowLeft className="w-5 h-5" />
-          </Link>
+          </a>
           <div className="flex items-center gap-2">
             <Lock className="w-6 h-6 text-blue-600" />
             <h1 className="text-xl font-bold">Generate SSL Certificate</h1>
@@ -553,12 +552,13 @@ export default function GeneratePage() {
               Download Certificates (.zip)
             </button>
 
-            <Link
+            {/* Full page load so the dashboard shows the new certificate */}
+            <a
               href="/dashboard"
               className="block text-blue-600 hover:text-blue-700 font-medium"
             >
               ← Back to Dashboard
-            </Link>
+            </a>
           </div>
         )}
       </main>
